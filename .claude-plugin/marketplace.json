@@ -1,0 +1,15 @@
+{
+  "name": "attentionfarm",
+  "owner": {
+    "name": "attentionfarm"
+  },
+  "plugins": [
+    {
+      "name": "attentionfarm",
+      "source": "./",
+      "description": "a clickable powered by attentionfarm label and a scrolling status line below the input.",
+      "version": "0.1.4"
+    }
+  ],
+  "description": "attentionfarm mods for claude code"
+}

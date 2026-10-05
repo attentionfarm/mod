@@ -1,0 +1,9 @@
+{
+  "name": "attentionfarm",
+  "version": "0.1.4",
+  "description": "clickable attentionfarm label and scrolling status line for claude code.",
+  "author": {
+    "name": "attentionfarm"
+  },
+  "types": "./types/index.d.ts"
+}
