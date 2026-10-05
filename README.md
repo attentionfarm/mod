@@ -6,25 +6,31 @@ the cli status line scrolls: **watch ad, get tokens | attentionfarm |**.
 
 ads and token earning are coming soon. this version is only a label and ticker.
 
-## try it
+## install
 
 requires macos and a claude code build with native mod support.
-
-[download the mod](https://attentionfarm.com/downloads/attentionfarm-mod-v0.1.4.zip) and follow [the installation instructions](INSTALL.md).
-
-for a repository installation, when you have access:
 
 ```sh
 claude plugin marketplace add attentionfarm/mod
 claude plugin install attentionfarm@attentionfarm
 ```
 
-restart claude after installation. to update:
+exit claude, then restart:
+
+```sh
+claude
+```
+
+see [installation and controls](INSTALL.md) for more details.
+
+## update
 
 ```sh
 claude plugin marketplace update attentionfarm
 claude plugin update attentionfarm@attentionfarm
 ```
+
+exit and restart with `claude` after updating.
 
 ## ticker controls
 
@@ -35,7 +41,6 @@ use `/attentionfarm ticker pause`, `resume`, `off` or `on`. the 60-character lin
 ```sh
 claude plugin validate --strict .claude-plugin/plugin.json
 claude plugin test .
-python3 scripts/build-release.py
 ```
 
-native tests passed on claude code 2.1.288. a version number alone does not establish mod support. the build produces a deterministic zip, checksum and file inventory under `dist/`.
+native tests passed on claude code 2.1.288. a version number alone does not establish mod support.
