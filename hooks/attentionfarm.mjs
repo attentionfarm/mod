@@ -448,12 +448,11 @@ function wordmark(Text) {
   return Text({ bold: true, backgroundColor: TIDE, color: TIDE_INK, children: [' attentionfarm '] });
 }
 
-// The terminal band has no chrome of its own, so it wears a tide outline. The desktop app already
-// draws a padded card around the band; a second frame inside it only adds dead space.
+// Every attentionfarm band wears a tide outline. The desktop app draws its own padded card around
+// the band, so there the outline is pulled out over that padding to sit at the card's edge.
 function frame(Box, children, surface) {
-  return surface === 'terminal'
-    ? Box({ flexDirection: 'column', borderStyle: 'round', borderColor: TIDE, paddingX: 1, children })
-    : Box({ flexDirection: 'column', children });
+  const pull = surface === 'terminal' ? {} : { margin: -1 };
+  return Box({ flexDirection: 'column', borderStyle: 'round', borderColor: TIDE, paddingX: 1, ...pull, children });
 }
 
 function openPrivacy($) {
