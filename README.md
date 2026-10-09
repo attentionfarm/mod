@@ -38,15 +38,24 @@ exit and restart with `claude` after updating.
 - `/attentionfarm account`: your account, log out, log out everywhere, delete account.
 - `/attentionfarm logout`: logs this machine out, even offline.
 
-login works in the claude code terminal on macos. on desktop the mod shows the label only.
+login works in claude code on macos, in the terminal and in the desktop app.
 
 what is stored, and where:
 
 - **on your mac:** a session key in your macos login keychain, item `attentionfarm-mod`, with your masked email as its comment. never in plain files, never in claude code settings. logging out deletes it.
 - **on attentionfarm:** your email, a scrambled copy of each session key with its last-used day, and daily totals with no names attached. sessions end after 90 days.
-- **never:** your prompts, code, files, paths, ip address or device name. the mod hooks no prompt or tool events.
+- **never:** your prompts, code, files, paths, ip address or device name, except while free backup is on (below). the mod hooks no prompt or tool events.
 
-delete account removes your account and sessions immediately, along with any waitlist email you gave us before launch. see [attentionfarm.com/privacy](https://attentionfarm.com/privacy).
+delete account removes your account, sessions and backup keys immediately. see [attentionfarm.com/privacy](https://attentionfarm.com/privacy).
+
+## free backup
+
+when claude stops at a usage limit in a terminal session, the band offers **continue free**. pressing it points this claude code process at attentionfarm, which passes its requests to a free model on openrouter (nemotron 3 ultra to start), and sends "continue where you left off." the band shows which model is answering and how many free requests are left today. **back to claude** puts your own login back.
+
+- it only switches what this process uses: no file, no `~/.claude` setting, nothing after you quit.
+- it is never offered in the desktop app, a remote session, a cloud provider, or when you use your own api key, gateway or key helper, because there the switch could send your own credential to attentionfarm.
+- while it is on, your prompts and code go through attentionfarm to openrouter and the model's host. attentionfarm keeps none of them, but free models' hosts may keep and learn from what they receive.
+- each account gets a daily number of free requests. it resets at midnight utc.
 
 ## ticker controls
 

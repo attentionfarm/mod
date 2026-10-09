@@ -7,6 +7,7 @@ const EMAIL = 'you@example.com';
 const MASKED = 'y•••@example.com';
 const CODE = '482913';
 const CHALLENGE = `mch_${'c'.repeat(24)}`;
+const BACKUP_KEY = `afb_${'B'.repeat(43)}`;
 const SURFACES = ['terminal', 'desktop'] as const;
 const BAND = { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {} } as const;
 const PANE_PROPS = { title: 'attentionfarm', isFocused: true, bodyColumns: 80, placement: 'inline', scroll: { offset: 0, bodyRows: 8 }, view: {} } as const;
@@ -16,14 +17,23 @@ const ALLOWED_KEYS: Record<string, string[]> = {
   '/auth/logout': ['all'],
   '/account': ['confirm'],
   '/me': [],
+  '/backup/key': [],
+  '/backup/status': [],
 };
 
 type Reply = { status: number; body?: unknown } | 'offline';
 type Sent = { path: string; method: string; headers: Record<string, string>; body?: Record<string, unknown> };
 
-function world(on: On, options: { keychain?: { token: string; comment: string }; replies?: Record<string, Reply | Reply[]>; security?: boolean } = {}) {
+function world(on: On, options: { keychain?: { token: string; comment: string }; replies?: Record<string, Reply | Reply[]>; security?: boolean; env?: Record<string, string>; settings?: Record<string, unknown> } = {}) {
   const clock = mock.clock(on, { now: 1_000_000 });
-  mock.env(on, {});
+  const env: Record<string, string> = { ...options.env };
+  const submitted: string[] = [];
+  on('env.get', ($, e) => ({ value: env[e.name] }));
+  on('env.set', ($, e) => { if (e.value === undefined) delete env[e.name]; else env[e.name] = e.value; return { value: undefined }; });
+  on('settings.read', () => ({ value: options.settings ?? {} }));
+  on('prompt.submit', ($, e) => { submitted.push(e.text); return { text: e.text, context: [] } as any; });
+  on('classic.StopFailure', () => ({}));
+  on('classic.Stop', () => ({}));
   const sent: Sent[] = [];
   const toasts: string[] = [];
   const opened: string[] = [];
@@ -39,6 +49,8 @@ function world(on: On, options: { keychain?: { token: string; comment: string };
     '/me': { status: 200, body: { account: { email: EMAIL, created_at: '2026-10-09T12:00:00.000Z' }, session: { expires_at: '2027-01-07T12:00:00.000Z' }, earning: 'coming_soon' } },
     '/auth/logout': { status: 200, body: { revoked: 1 } },
     '/account': { status: 200, body: { deleted: true } },
+    '/backup/key': { status: 200, body: { key: BACKUP_KEY, base_path: '/api/mod/backup', model: { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', label: 'nemotron 3 ultra' }, daily_requests: 100, remaining_today: 100 } },
+    '/backup/status': { status: 200, body: { available: true, model: { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', label: 'nemotron 3 ultra' }, daily_requests: 100, remaining_today: 87 } },
     ...options.replies,
   };
   on('session.start', () => ({ cwd: '/work' }));
@@ -77,7 +89,7 @@ function world(on: On, options: { keychain?: { token: string; comment: string };
     const hex = [...new TextEncoder().encode(keychain.comment)].map(b => b.toString(16).padStart(2, '0').toUpperCase()).join('');
     return { value: { exitCode: 0, stdout: `    "icmt"<blob>=0x${hex}  "escaped"\n`, stderr: '' } };
   });
-  return { clock, sent, toasts, opened, closed, focused, runs, written, keychain: () => keychain };
+  return { clock, sent, toasts, opened, closed, focused, runs, written, env, submitted, keychain: () => keychain };
 }
 
 async function start($: any, clock: { advance: (ms: number) => Promise<void> }, surface: 'terminal' | 'desktop' = 'terminal') {
@@ -92,7 +104,7 @@ const pane = ($: any, surface: 'terminal' | 'desktop' = 'terminal') =>
 
 function stateHasNoSecrets(values: unknown[]) {
   const text = JSON.stringify(values);
-  for (const secret of [TOKEN, EMAIL, CODE, CHALLENGE]) expect(text.includes(secret)).toBe(false);
+  for (const secret of [TOKEN, EMAIL, CODE, CHALLENGE, BACKUP_KEY]) expect(text.includes(secret)).toBe(false);
 }
 
 for (const surface of SURFACES) {
@@ -157,7 +169,7 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(await view.find({ type: 'Text', text: "you're in." })).toBeUndefined();
   expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
   for (const request of sent) {
-    expect(request.headers['x-attentionfarm-mod']).toBe('0.2.1');
+    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.0');
     expect(Object.keys(request.body ?? {}).every(key => ALLOWED_KEYS[request.path].includes(key))).toBe(true);
   }
   const after = view;
@@ -258,7 +270,7 @@ test('resend sends the same email again and says so', async ($, on) => {
 test('session start: restores from the keychain and confirms the session with the server', async ($, on) => {
   const live = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, live.clock);
-  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.2.1', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
+  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.0', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
   expect(await (await band($, 'terminal', 'live')).find({ type: 'Button', key: 'attentionfarm-account', text: MASKED })).toBeDefined();
 });
 
@@ -386,4 +398,108 @@ test('desktop: every step has the same shape (quiet close, full-width field, one
   await view.input({ key: 'attentionfarm-code', text: '111111' });
   expect(await view.find({ type: 'Text', text: "that code didn't match. 4 tries left." })).toBeDefined();
   await check('error');
+});
+
+// --- free backup -------------------------------------------------------------
+
+const LIMIT = { error: 'rate_limit' } as const;
+
+test('backup: a limit stop offers it, the switch points this process at attentionfarm, and back puts claude back', async ($, on) => {
+  const { clock, sent, env, submitted, written } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
+  await start($, clock);
+  await $.classic.StopFailure(LIMIT);
+  const view = await band($, 'terminal');
+  expect(await view.find({ type: 'Text', text: 'you hit your claude limit.' })).toBeDefined();
+  expect(await view.find({ type: 'Text', text: "free models' hosts may learn from what they receive." })).toBeDefined();
+  expect((await view.find({ type: 'Button', key: 'attentionfarm-backup-on', text: 'continue free' }))?.props.variant).toBe('secondary');
+  await view.press({ key: 'attentionfarm-backup-on' });
+  const keyCall = sent.find(request => request.path === '/backup/key')!;
+  expect(keyCall).toMatchObject({ method: 'POST', headers: { authorization: `Bearer ${TOKEN}`, 'x-attentionfarm-mod': '0.3.0' } });
+  expect(env).toEqual({ ANTHROPIC_BASE_URL: `${API}/backup`, ANTHROPIC_AUTH_TOKEN: BACKUP_KEY, CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1' });
+  expect(submitted).toEqual(['continue where you left off.']);
+  expect(await view.find({ type: 'Text', text: 'free backup' })).toBeDefined();
+  expect(await view.find({ type: 'Text', text: 'nemotron 3 ultra · 100 requests left today' })).toBeDefined();
+  // A finished turn refreshes the count.
+  await $.classic.Stop({ stop_hook_active: false });
+  expect(await view.find({ type: 'Text', text: 'nemotron 3 ultra · 87 requests left today' })).toBeDefined();
+  // A failure while on backup says so; the next finished turn clears it.
+  await $.classic.StopFailure(LIMIT);
+  expect(await view.find({ type: 'Text', text: "the free model is busy, or today's free backup is used up." })).toBeDefined();
+  await $.classic.Stop({ stop_hook_active: false });
+  expect(await view.find({ type: 'Text', text: "the free model is busy, or today's free backup is used up." })).toBeUndefined();
+  await view.press({ key: 'attentionfarm-backup-off' });
+  expect(env).toEqual({});
+  expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
+  stateHasNoSecrets([written]);
+});
+
+test('backup: switching back leaves alone what the person had set themselves', async ($, on) => {
+  const { clock, env } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
+  await start($, clock);
+  await $.classic.StopFailure(LIMIT);
+  env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = '1';
+  const view = await band($, 'terminal');
+  await view.press({ key: 'attentionfarm-backup-on' });
+  await view.press({ key: 'attentionfarm-backup-off' });
+  expect(env).toEqual({ CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1' });
+});
+
+test('backup: logging out ends it', async ($, on) => {
+  const { clock, env } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
+  await start($, clock);
+  await $.classic.StopFailure({ error: 'billing_error' });
+  const view = await band($, 'terminal');
+  await view.press({ key: 'attentionfarm-backup-on' });
+  expect(env.ANTHROPIC_AUTH_TOKEN).toBe(BACKUP_KEY);
+  await $.command.run({ command: 'attentionfarm', args: 'logout' });
+  expect(env).toEqual({});
+});
+
+const BLOCKED = [
+  ['the desktop app', 'desktop', {}],
+  ['a hosted login', 'terminal', { env: { CLAUDE_CODE_SIMPLE: '1' } }],
+  ['another entrypoint', 'terminal', { env: { CLAUDE_CODE_ENTRYPOINT: 'claude-desktop' } }],
+  ['a cloud provider', 'terminal', { env: { CLAUDE_CODE_USE_BEDROCK: '1' } }],
+  ['their own api key', 'terminal', { env: { ANTHROPIC_API_KEY: 'sk-ant-api03-own-key' } }],
+  ['their own gateway', 'terminal', { env: { ANTHROPIC_BASE_URL: 'https://gateway.example' } }],
+  ['a key helper', 'terminal', { settings: { apiKeyHelper: '/bin/echo key' } }],
+] as const;
+for (const [name, surface, extra] of BLOCKED) {
+  test(`backup: never offered with ${name}, where the switch could send someone's own credential`, async ($, on) => {
+    const scoped = world(on, { keychain: { token: TOKEN, comment: MASKED }, ...extra });
+    await start($, scoped.clock, surface);
+    await $.classic.StopFailure(LIMIT);
+    const view = await band($, surface);
+    expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-on' })).toBeUndefined();
+    expect(scoped.sent.some(request => request.path === '/backup/key')).toBe(false);
+  });
+}
+
+test('backup: other stops do not offer it, and not now dismisses it', async ($, on) => {
+  const { clock } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
+  await start($, clock);
+  await $.classic.StopFailure({ error: 'invalid_request' });
+  const view = await band($, 'terminal');
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-on' })).toBeUndefined();
+  await $.classic.StopFailure({ error: 'oauth_org_not_allowed' });
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-on' })).toBeDefined();
+  await view.press({ key: 'attentionfarm-backup-dismiss' });
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-on' })).toBeUndefined();
+});
+
+test('backup: logged out, the offer asks for sign-up first; an unavailable service changes nothing', async ($, on) => {
+  const out = world(on, { replies: { '/backup/key': { status: 503, body: { error: { code: 'backup_unavailable', message: 'x' } } } } });
+  await start($, out.clock);
+  await $.classic.StopFailure(LIMIT);
+  const view = await band($, 'terminal');
+  await view.press({ key: 'attentionfarm-backup-on', });
+  expect(await view.find({ type: 'Input', key: 'attentionfarm-email' })).toBeDefined();
+  await view.input({ key: 'attentionfarm-email', text: EMAIL });
+  await view.input({ key: 'attentionfarm-code', text: CODE });
+  await out.clock.advance(5_000);
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-on', text: 'continue free' })).toBeDefined();
+  await view.press({ key: 'attentionfarm-backup-on' });
+  expect(await view.find({ type: 'Text', text: "free backup isn't available right now." })).toBeDefined();
+  expect(out.env).toEqual({});
+  expect(out.submitted).toEqual([]);
 });

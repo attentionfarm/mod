@@ -6,6 +6,9 @@ declare module 'claude-code' {
       // No email, code, token or challenge id: only a masked address such as n•••@gmail.com.
       // flash: the few seconds after a login when the band says "you're in." / "welcome back."
       account: { status: 'unknown' | 'out' | 'in' | 'offline' | 'unsupported'; masked?: string; flash?: 'new' | 'back' };
+      // Free backup in this process. No key: only what the band shows, and whether the switch set
+      // CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS so switching back unsets only its own.
+      backup: { status: 'off' | 'offer' | 'switching' | 'on'; label?: string; remaining?: number; note?: string; ownsBetas?: boolean };
       pane: {
         site: 'none' | 'pane' | 'band';
         step: 'email' | 'code' | 'account' | 'delete';
