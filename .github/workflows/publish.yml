@@ -46,4 +46,4 @@ jobs:
             echo "release $version already exists"
             exit 0
           fi
-          gh release create "$version" "dist/attentionfarm-mod-$version.zip" "dist/attentionfarm-mod-$version.zip.sha256" --target "$(git rev-parse HEAD)" --title "attentionfarm mod $version" --notes 'a clickable powered by attentionfarm label and a cli ticker: watch ad, get tokens | attentionfarm |. clicking opens the email waitlist. ads and token earning are coming soon. macos; requires native claude code mod support.'
+          gh release create "$version" "dist/attentionfarm-mod-$version.zip" "dist/attentionfarm-mod-$version.zip.sha256" --target "$(git rev-parse HEAD)" --title "attentionfarm mod $version" --notes 'log in or sign up inside claude code with a 6-digit email code: no password, no browser. your session key stays in your macos keychain. also a clickable powered by attentionfarm label and a cli ticker: watch ad, get tokens | attentionfarm |. earning is coming soon. macos terminal; requires native claude code mod support. privacy: https://attentionfarm.com/privacy'

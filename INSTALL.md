@@ -30,7 +30,13 @@ exit and restart with `claude` after updating.
 
 ## what to expect
 
-**powered by attentionfarm** appears above the prompt without a url beside it. clicking it deliberately invokes the macos browser opener with the fixed waitlist url. the cli ticker repeats **watch ad, get tokens | attentionfarm |**. ads and token earning are coming soon.
+**powered by attentionfarm   log in   sign up** appears above the prompt. clicking the label deliberately invokes the macos browser opener with the fixed waitlist url. the cli ticker repeats **watch ad, get tokens | attentionfarm |**. ads and token earning are coming soon.
+
+## log in or sign up
+
+click **sign up** (or run `/attentionfarm signup`), type your email and press enter, then type or paste the 6-digit code from the email. that's it. returning users click **log in**; it is the same flow. `/attentionfarm account` shows your account, log out, log out everywhere and delete account; `/attentionfarm logout` logs out, even offline.
+
+login works in the claude code terminal on macos. your session key is kept in your macos login keychain (item `attentionfarm-mod`) and removed when you log out. your email and code are typed into the mod's own fields, never into the prompt, so they do not reach the conversation. privacy: https://attentionfarm.com/privacy
 
 `/attentionfarm ticker off` hides the ticker; `on`, `pause` and `resume` control it. the scrolling status line is a cli surface; desktop display remains unverified.
 
@@ -46,4 +52,6 @@ exit and restart with `claude`.
 
 fresh public marketplace add and installation passed, along with native label/click, ticker/wrap, pause/resume, cleanup and noninteractive tests. real cli rendering was observed. a real browser click and desktop installation remain unverified. the opener supports macos; other platforms are not verified.
 
-claude’s installer manages its own plugin files. the mod does not write files or change claude settings. it performs no automatic website navigation, network polling, login or compute routing.
+for 0.2.0, sign up, log in, the account view, log out and delete account were exercised in a real claude code 2.1.290 terminal against a local attentionfarm worker, with the keychain item written over stdin and removed on logout. desktop, linux and windows login are not supported.
+
+claude’s installer manages its own plugin files. the mod does not write files or change claude settings. it performs no automatic website navigation, network polling or compute routing. it contacts attentionfarm only when you log in, sign up, log out or delete your account, and once at session start to confirm a saved login; logged out, it sends nothing.

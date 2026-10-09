@@ -7,8 +7,8 @@
     {
       "name": "attentionfarm",
       "source": "./",
-      "description": "a clickable powered by attentionfarm label and a scrolling status line below the input.",
-      "version": "0.1.4"
+      "description": "log in or sign up with a 6-digit email code, a clickable powered by attentionfarm label, and a scrolling status line. earning is coming soon.",
+      "version": "0.2.0"
     }
   ],
   "description": "attentionfarm mods for claude code"
