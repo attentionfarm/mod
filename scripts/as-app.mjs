@@ -60,9 +60,12 @@ if (command === 'configure') {
   console.log(`this clone now commits as ${name} <${email}>`);
 } else if (command === 'push') {
   const { email } = await identity();
-  git('fetch', '--quiet', 'origin', 'main');
+  // An empty repository has no main yet; then every commit is outgoing.
+  const remoteMain = git('ls-remote', `https://github.com/${repo}.git`, 'refs/heads/main') ? 'origin/main' : null;
+  if (remoteMain) git('fetch', '--quiet', 'origin', 'main');
   // Refuse to publish any commit that would carry another identity.
-  const outgoing = git('log', '--format=%H %ae %ce', 'origin/main..HEAD').split('\n').filter(Boolean);
+  const range = remoteMain ? `${remoteMain}..HEAD` : 'HEAD';
+  const outgoing = git('log', '--format=%H %ae %ce', range).split('\n').filter(Boolean);
   const foreign = outgoing.filter((line) => line.split(' ').slice(1).some((e) => e !== email));
   if (foreign.length) {
     console.error(`refusing to push commits not authored and committed as ${email}:\n${foreign.join('\n')}`);
