@@ -465,8 +465,18 @@ function heading(Box, Text, Button, $, title, detail, { close = true, detailWrap
   const parts = [line(Text, title, { bold: true })];
   if (detail) parts.push(line(Text, detail, { dimColor: true, wrap: detailWrap }));
   parts.push(Box({ flexGrow: 1 }));
-  if (close) parts.push(Button({ key: 'attentionfarm-close', role: 'dismiss', label: 'close', onPress: () => closeFlow($) }));
+  if (close) parts.push(Button({ key: 'attentionfarm-close', plain: true, dimColor: true, label: 'close', onPress: () => closeFlow($) }));
   return Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: parts });
+}
+
+// A field spans the band's width rather than sizing to its placeholder.
+function field(Box, input) {
+  return Box({ flexDirection: 'row', width: '100%', children: [input] });
+}
+
+// Controls under a field: all Buttons, so the app draws them at one size on one baseline.
+function controls(Box, children) {
+  return Box({ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 2, children });
 }
 
 function renderFlow($, e, pane, account) {
@@ -479,13 +489,13 @@ function renderFlow($, e, pane, account) {
     : undefined;
   if (pane.step === 'email') {
     lines.push(head('sign up or log in', 'one code by email. no password.'));
-    lines.push(Input({
+    lines.push(field(Box, Input({
       key: 'attentionfarm-email', placeholder: 'you@example.com', value: flow.typedEmail, submitLabel: 'send code', autoFocus: true,
       onInput: value => { flow.typedEmail = value; },
       onSubmit: value => sendCode($, value),
-    }));
+    })));
     if (status) lines.push(status);
-    lines.push(Box({ flexDirection: 'row', flexWrap: 'wrap', columnGap: 2, children: [
+    lines.push(controls(Box, [
       Button({
         key: 'attentionfarm-updates', plain: true, dimColor: !pane.updates,
         label: pane.updates ? "✓ we'll email you when earning opens" : '+ email me when earning opens',
@@ -493,10 +503,10 @@ function renderFlow($, e, pane, account) {
       }),
       Box({ flexGrow: 1 }),
       Button({ key: 'attentionfarm-privacy', plain: true, dimColor: true, label: 'privacy', onPress: () => openPrivacy($) }),
-    ] }));
+    ]));
   } else if (pane.step === 'code') {
     lines.push(head('check your email', `sent to ${pane.sentTo || 'your inbox'}`, { detailWrap: 'truncate-middle' }));
-    lines.push(Input({
+    lines.push(field(Box, Input({
       key: 'attentionfarm-code', placeholder: '6-digit code', value: flow.typedCode, submitLabel: 'verify', autoFocus: true,
       onInput: value => {
         flow.typedCode = value;
@@ -504,33 +514,34 @@ function renderFlow($, e, pane, account) {
         if (/^\d{6}$/.test(digits)) return verifyCode($, digits);
       },
       onSubmit: value => { flow.typedCode = value; return verifyCode($, value); },
-    }));
+    })));
     if (status) lines.push(status);
     if (flow.devCode) lines.push(line(Text, `local dev code: ${flow.devCode}`, { dimColor: true }));
-    lines.push(Box({ flexDirection: 'row', flexWrap: 'wrap', columnGap: 2, children: [
+    lines.push(controls(Box, [
       pane.canResend
         ? Button({ key: 'attentionfarm-resend', plain: true, label: 'resend code', onPress: () => sendCode($, '', { resend: true }) })
-        : line(Text, 'resend in a minute', { dimColor: true }),
+        : Button({ key: 'attentionfarm-resend-wait', plain: true, dimColor: true, label: 'resend in a minute', onPress: () => setPane($, { note: 'you can resend a minute after the last code.', error: undefined }) }),
       Button({ key: 'attentionfarm-change-email', plain: true, dimColor: true, label: 'wrong email?', onPress: () => useDifferentEmail($) }),
-    ] }));
+    ]));
   } else if (pane.step === 'delete') {
     lines.push(head('delete your account?'));
     lines.push(line(Text, "this removes your email from attentionfarm. it can't be undone.", { dimColor: true }));
-    lines.push(Input({ key: 'attentionfarm-delete', placeholder: 'type delete', submitLabel: 'delete', autoFocus: true, onSubmit: value => deleteAccount($, value) }));
+    lines.push(field(Box, Input({ key: 'attentionfarm-delete', placeholder: 'type delete', submitLabel: 'delete', autoFocus: true, onSubmit: value => deleteAccount($, value) })));
     if (status) lines.push(status);
-    lines.push(Button({ key: 'attentionfarm-cancel', plain: true, label: 'cancel', onPress: () => setPane($, { step: 'account', error: undefined }) }));
+    lines.push(controls(Box, [Button({ key: 'attentionfarm-cancel', plain: true, label: 'cancel', onPress: () => setPane($, { step: 'account', error: undefined }) })]));
   } else {
     lines.push(head(account.masked || 'your account', account.status === 'offline' ? 'offline' : undefined));
     lines.push(line(Text, "earning isn't live yet. nothing to collect.", { dimColor: true }));
     if (status) lines.push(status);
-    lines.push(Box({ flexDirection: 'row', flexWrap: 'wrap', columnGap: 2, children: [
+    lines.push(controls(Box, [
       Button({ key: 'attentionfarm-logout', plain: true, label: 'log out', onPress: () => logout($) }),
       Button({ key: 'attentionfarm-logout-all', plain: true, dimColor: true, label: 'log out everywhere', onPress: () => logout($, { all: true }) }),
       Box({ flexGrow: 1 }),
       Button({ key: 'attentionfarm-delete-account', plain: true, dimColor: true, label: 'delete account', onPress: async () => { await setPane($, { step: 'delete', error: undefined }); await focus($, 'attentionfarm-delete'); } }),
-    ] }));
+    ]));
   }
-  return Box({ flexDirection: 'column', children: lines });
+  // On desktop a row of breathing room between rows; in a terminal one cell is a whole blank line.
+  return Box({ flexDirection: 'column', rowGap: e.surface === 'terminal' ? 0 : 1, children: lines });
 }
 
 // The resting band: two lines, the wordmark and one action, then the honest line.

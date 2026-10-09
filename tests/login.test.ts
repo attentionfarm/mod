@@ -135,7 +135,7 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(await view.find({ type: 'Text', text: 'check your email' })).toBeDefined();
   expect(await view.find({ type: 'Text', text: `sent to ${MASKED}` })).toBeDefined();
   expect((await view.find({ type: 'Input', key: 'attentionfarm-code' }))?.props.autoFocus).toBe(true);
-  expect(await view.find({ type: 'Text', text: 'resend in a minute' })).toBeDefined();
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-resend-wait', text: 'resend in a minute' })).toBeDefined();
   expect(await view.find({ type: 'Button', key: 'attentionfarm-resend' })).toBeUndefined();
   await clock.advance(60_000);
   expect(await view.find({ type: 'Button', key: 'attentionfarm-resend', text: 'resend code' })).toBeDefined();
@@ -350,4 +350,40 @@ test('a terminal without the security tool shows the label only', async ($, on) 
   // Where login cannot happen, the band never asks for a sign-up it can't take.
   expect(await drawn.find({ type: 'Text', text: "earning isn't live yet." })).toBeDefined();
   expect(await $.command.run({ command: 'attentionfarm', args: 'signup' })).toMatchObject({ text: 'login works in claude code on macos for now.' });
+});
+
+test('desktop: every step has the same shape (quiet close, full-width field, one row of buttons, spaced rows)', async ($, on) => {
+  const desktop = world(on, { replies: { '/auth/verify': [{ status: 400, body: { error: { code: 'invalid_code', attempts_left: 4 } } }] } });
+  await $.session.start({ cwd: '/work', surface: null, isInteractive: false });
+  const view = await band($, 'desktop');
+  await desktop.clock.advance(0);
+  const walk = (node: any, fn: (n: any, parent: any) => void, parent?: any) => {
+    if (!node || typeof node !== 'object') return;
+    fn(node, parent);
+    for (const child of node.children ?? []) walk(child, fn, node);
+  };
+  const check = async (step: string) => {
+    const tree = await view.drawn();
+    let closes = 0;
+    walk(tree, (node, parent) => {
+      if (node.type === 'Button' && node.props?.key === 'attentionfarm-close') {
+        closes += 1;
+        expect(node.props).toMatchObject({ plain: true, dimColor: true });
+        expect(node.props.role).toBeUndefined();
+      }
+      if (node.type === 'Input') expect(parent?.props?.width).toBe('100%');
+      if (node.type === 'Box' && node.props?.alignItems === 'center' && node.props?.flexWrap === 'wrap') {
+        for (const child of node.children ?? []) if (child?.type !== 'Box') expect(child?.type).toBe('Button');
+      }
+      if (node.type === 'Box' && node.props?.rowGap !== undefined) expect(node.props.rowGap).toBe(1);
+    });
+    expect(closes).toBe(step === 'band' ? 0 : 1);
+  };
+  await view.press({ key: 'attentionfarm-signup' });
+  await check('email');
+  await view.input({ key: 'attentionfarm-email', text: EMAIL });
+  await check('code');
+  await view.input({ key: 'attentionfarm-code', text: '111111' });
+  expect(await view.find({ type: 'Text', text: "that code didn't match. 4 tries left." })).toBeDefined();
+  await check('error');
 });
