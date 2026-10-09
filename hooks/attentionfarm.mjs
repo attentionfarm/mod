@@ -47,6 +47,7 @@ let generation = 0;
 let interactive = false;
 let apiTarget;
 let bandRequestId = 'AbovePrompt';
+let restoring = false;
 // What was typed and the challenge id stay out of $.state, which any plugin can read. The session
 // token is never held here at all: it is read from the keychain when a request needs it.
 const flow = { gen: 0, typedEmail: '', email: '', typedCode: '', challengeId: undefined, expiresAt: 0, devCode: undefined, busy: false, resendTimer: undefined };
@@ -225,6 +226,15 @@ function resetFlow() {
 
 async function openPane($) {
   await $.ui.open({ id: PANE_ID, title: 'attentionfarm', focus: true, closeOnEscape: true, rows: 8 });
+}
+
+// The desktop app hosts its session through the sdk, so session.start reports no surface and no
+// person; the band drawing on a login surface is what says someone is there. Restore once, from
+// whichever comes first, and never from a render itself (a render hook may not write state).
+function ensureRestore($) {
+  if (restoring) return;
+  restoring = true;
+  $.clock.after(0, () => restore($));
 }
 
 async function usableAccount($) {
@@ -502,11 +512,7 @@ export function register(on) {
     await $.command.register({ name: 'attentionfarm', description: 'sign up, log in, your account, and the scrolling status line ticker.' });
     interactive = e.isInteractive;
     await syncTicker($);
-    if (e.isInteractive && LOGIN_SURFACES.has(e.surface)) {
-      $.clock.after(0, () => restore($));
-    } else {
-      await $.state.set(ACCOUNT, { status: 'unsupported' });
-    }
+    if (e.isInteractive && LOGIN_SURFACES.has(e.surface)) ensureRestore($);
     return result;
   });
 
@@ -577,6 +583,7 @@ export function register(on) {
     const controls = [label];
     if (LOGIN_SURFACES.has(e.surface)) {
       const { value: account = INITIAL_ACCOUNT } = await $.state.get(ACCOUNT);
+      if (account.status === 'unknown') ensureRestore($);
       if (account.status === 'out') {
         controls.push(Button({ key: 'attentionfarm-login', plain: true, label: 'log in', onPress: () => openFlow($, 'login', 'band') }));
         controls.push(Button({ key: 'attentionfarm-signup', plain: true, label: 'sign up', onPress: () => openFlow($, 'signup', 'band') }));

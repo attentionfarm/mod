@@ -313,10 +313,13 @@ test('logout command works offline and never prints the email, code or token', a
   stateHasNoSecrets([result]);
 });
 
-test('desktop: the band offers sign up and the command opens the flow', async ($, on) => {
+test('desktop: the band restores the session, offers sign up, and the command opens the flow', async ($, on) => {
   const desktop = world(on);
-  await start($, desktop.clock, 'desktop');
+  // The desktop app's session starts through the sdk: no surface and no person at session.start.
+  await $.session.start({ cwd: '/work', surface: null, isInteractive: false });
+  await desktop.clock.advance(0);
   const drawn = await band($, 'desktop');
+  await desktop.clock.advance(0);
   expect(await drawn.find({ type: 'Button', key: 'attentionfarm-signup', text: 'sign up' })).toBeDefined();
   await drawn.press({ key: 'attentionfarm-signup' });
   expect(await drawn.find({ type: 'Input', key: 'attentionfarm-email' })).toBeDefined();
