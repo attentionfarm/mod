@@ -37,7 +37,7 @@ exit and restart with `claude` after updating.
 - `/attentionfarm signup` or `/attentionfarm login`: opens the sign-in pane. paste the code with or without spaces; it checks itself at 6 digits.
 - `/attentionfarm account`: your account, log out, log out everywhere, delete account.
 - `/attentionfarm logout`: logs this machine out, even offline.
-- `/attentionfarm free`: use free tokens now instead of your claude account (terminal only).
+- `/attentionfarm free`: use free tokens now instead of your claude account.
 
 login works in claude code on macos, in the terminal and in the desktop app.
 
@@ -51,13 +51,14 @@ delete account removes your account, sessions and backup keys immediately. see [
 
 ## free backup
 
-when claude stops at a usage limit in a terminal session, the band offers **continue free**. you can also choose it any time: press **use free tokens** in the band, or run `/attentionfarm free`. continuing points this claude code process at attentionfarm, which passes its requests to a free model on openrouter (nemotron 3 ultra to start); after a limit stop it also sends "continue where you left off." the band shows which model is answering and how many free requests are left today. **back to claude** puts your own login back.
+when claude stops at a usage limit, the band offers **continue free**. you can also choose it any time: press **use free tokens** in the band, or run `/attentionfarm free`. it works in the terminal and in the claude desktop app.
 
-- it only switches what this process uses: no file, no `~/.claude` setting, nothing after you quit.
-- it is never offered in the desktop app, a remote session, a cloud provider, or when you use your own api key, gateway or key helper, because there the switch could send your own credential to attentionfarm.
-- while it is on, your prompts and code go through attentionfarm to openrouter and the model's host. attentionfarm keeps none of them, but free models' hosts may keep and learn from what they receive.
+- while it is on, the mod answers each model step itself: it sends the conversation, claude code's system prompt and the tool list to attentionfarm, which passes them to a free model on openrouter (nemotron 3 ultra to start). claude code sends nothing to anthropic for those steps, and your claude login is never used or shared.
+- every tool call the free model asks for is put to you before it runs, even in auto mode. a deny stays a deny.
+- **back to claude** switches back at once. nothing is written to `~/.claude` or your environment.
+- attentionfarm keeps none of your prompts or code, but free models' hosts may keep and learn from what they receive.
 - each account gets a daily number of free requests. it resets at midnight utc.
-- the band counts the free tokens this session used, from each reply's own usage, on your machine. switching back keeps the count; `/clear` starts it again.
+- the band counts the free tokens this session used, from each reply's own usage, on your machine. `/clear` starts it again.
 
 ## ticker controls
 

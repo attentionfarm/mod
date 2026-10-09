@@ -1,4 +1,5 @@
 import { update } from 'claude-code';
+import { TOOL_SCHEMAS } from './tool-schemas.mjs';
 
 const TICKER_STATE = { plugin: 'attentionfarm', key: 'ticker' };
 const TICKER_OFFSET = { plugin: 'attentionfarm', key: 'tickerOffset' };
@@ -49,10 +50,11 @@ const COPY = {
   network: "couldn't reach attentionfarm. check your connection and try again.",
   unavailable: "login isn't available right now.",
   invalidEmail: 'enter a valid email.',
-  backupTerminalOnly: 'free backup works in claude code in a terminal for now.',
-  backupOwnKey: 'free backup is off while claude code uses your own api key or gateway.',
+  backupUsedUp: "today's free requests are used up. they reset at midnight utc; switch back to claude meanwhile.",
+  backupRejected: "the free model couldn't take this request. try again, or switch back to claude.",
+  freeToolAsk: 'the free model (through attentionfarm) asked for this. check it before allowing.',
   backupUnavailable: "free backup isn't available right now.",
-  backupBusy: "the free model is busy, or today's free backup is used up.",
+  backupBusy: 'the free model is busy right now. try again in a minute, or switch back to claude.',
   enterCode: 'enter the 6-digit code from the email.',
   rateLimited: 'too many codes for this email. try again in 15 minutes.',
   emailFailed: "we couldn't send the email. try again in a minute.",
@@ -70,9 +72,6 @@ let interactive = false;
 let apiTarget;
 let bandRequestId = 'AbovePrompt';
 let restoring = false;
-let terminalSession = false;
-let started = false;
-let backupEligible;
 let switching = false;
 // What was typed and the challenge id stay out of $.state, which any plugin can read. The session
 // token is never held here at all: it is read from the keychain when a request needs it.
@@ -433,34 +432,20 @@ async function deleteAccount($, typed) {
 
 // --- free backup -----------------------------------------------------------
 
-// Claude Code sends ANTHROPIC_AUTH_TOKEN in place of the person's own login only when nothing else
-// owns that login. Where a host (the desktop app, a remote session, a cloud provider) or the person's
-// own key or gateway does, moving the address would send their credential to attentionfarm, so the
-// switch is never offered there.
-async function backupBlocked($) {
-  if (!terminalSession) return COPY.backupTerminalOnly;
-  const hosted = [
-    await $.env.get('CLAUDE_CODE_SIMPLE'),
-    await $.env.get('CLAUDE_CODE_REMOTE'),
-    await $.env.get('CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST'),
-    await $.env.get('CLAUDE_CODE_USE_BEDROCK'),
-    await $.env.get('CLAUDE_CODE_USE_VERTEX'),
-    await $.env.get('CLAUDE_CODE_USE_FOUNDRY'),
-  ];
-  if (hosted.some(value => value && !/^(?:0|false|no|off)$/i.test(value))) return COPY.backupTerminalOnly;
-  const entry = await $.env.get('CLAUDE_CODE_ENTRYPOINT');
-  if (entry && entry !== 'cli') return COPY.backupTerminalOnly;
-  const { api } = await target($);
-  const baseUrl = await $.env.get('ANTHROPIC_BASE_URL');
-  const authToken = await $.env.get('ANTHROPIC_AUTH_TOKEN');
-  // Our own switch (backup on, or set before a reload) is not the person's key or gateway.
-  const ours = baseUrl === `${api}/backup` && BACKUP_KEY_PATTERN.test(authToken || '');
-  const own = ours ? [await $.env.get('ANTHROPIC_API_KEY')] : [baseUrl, authToken, await $.env.get('ANTHROPIC_API_KEY')];
-  if (own.some(Boolean)) return COPY.backupOwnKey;
-  const settings = await $.settings.read().catch(() => ({}));
-  if (settings.apiKeyHelper) return COPY.backupOwnKey;
-  return undefined;
-}
+// Free backup answers each model step itself: it reads this step's conversation, the system prompt
+// and the tools, sends them to attentionfarm's free-model proxy with a backup key, and hands Claude
+// Code the reply. Claude Code makes no request of its own for that step, so the person's Claude login
+// is never used or sent anywhere, in the terminal and the desktop app alike. The backup key lives in
+// this module's memory only; after a reload the next step asks for a new one.
+let backupKey;
+let systemPrompt = '';
+// Tool calls the free model asked for. Each one is put to the person (or their mode's decider) before it
+// runs, never allowed silently, since its source is a model reached over the network.
+const freeToolIds = new Set();
+const STEP_TIMEOUT_MS = 180000;
+const STEP_MAX_TOKENS = 16000;
+const STOP_REASONS = new Set(['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'refusal']);
+const ANY_INPUT = { type: 'object', additionalProperties: true };
 
 function tokenTotal(tokens = NO_TOKENS) {
   return tokens.input + tokens.output + tokens.cacheRead + tokens.cacheCreation;
@@ -488,40 +473,45 @@ async function backupState($) {
   return value;
 }
 
+// Asks attentionfarm for a backup key for this login session. A new key replaces the last.
+async function mintBackupKey($) {
+  const { service } = await target($);
+  const token = await keychainToken($, service).catch(() => undefined);
+  if (!token) return { signedOut: true };
+  const result = await request($, 'POST', '/backup/key', { token });
+  if (result.status === 401) {
+    await signedOut($, COPY.sessionEnded);
+    return { signedOut: true };
+  }
+  const key = result.data?.key;
+  if (result.status !== 200 || !BACKUP_KEY_PATTERN.test(key || '')) {
+    return { note: result.status === 503 ? COPY.backupUnavailable : errorCopy(result) };
+  }
+  backupKey = key;
+  return {
+    label: typeof result.data?.model?.label === 'string' ? result.data.model.label.toLowerCase().slice(0, 40) : 'a free model',
+    remaining: Number.isInteger(result.data?.remaining_today) ? result.data.remaining_today : undefined,
+  };
+}
+
 async function switchToBackup($) {
   if (switching) return;
   const { reason = 'manual' } = await backupState($);
-  const blocked = await backupBlocked($);
-  if (blocked) {
-    await $.state.set(BACKUP, { status: 'offer', reason, note: blocked });
-    return;
-  }
-  const { service, api } = await target($);
-  const token = await keychainToken($, service).catch(() => undefined);
-  if (!token) {
+  const { service } = await target($);
+  if (!(await keychainToken($, service).catch(() => undefined))) {
     await openFlow($, 'signup', 'band');
     return;
   }
   switching = true;
   await $.state.set(BACKUP, { status: 'switching' });
   try {
-    const result = await request($, 'POST', '/backup/key', { token });
-    if (result.status === 401) {
-      await signedOut($, COPY.sessionEnded);
+    const minted = await mintBackupKey($);
+    if (minted.signedOut) return;
+    if (minted.note) {
+      await $.state.set(BACKUP, { status: 'offer', reason, note: minted.note });
       return;
     }
-    const key = result.data?.key;
-    if (result.status !== 200 || !BACKUP_KEY_PATTERN.test(key || '')) {
-      await $.state.set(BACKUP, { status: 'offer', reason, note: result.status === 503 ? COPY.backupUnavailable : errorCopy(result) });
-      return;
-    }
-    const betasWereOff = Boolean(await $.env.get('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'));
-    await $.env.set('ANTHROPIC_BASE_URL', `${api}/backup`);
-    await $.env.set('ANTHROPIC_AUTH_TOKEN', key);
-    if (!betasWereOff) await $.env.set('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS', '1');
-    const label = typeof result.data?.model?.label === 'string' ? result.data.model.label.toLowerCase().slice(0, 40) : 'a free model';
-    const remaining = Number.isInteger(result.data?.remaining_today) ? result.data.remaining_today : undefined;
-    await $.state.set(BACKUP, defined({ status: 'on', label, remaining, ownsBetas: !betasWereOff }));
+    await $.state.set(BACKUP, defined({ status: 'on', label: minted.label, remaining: minted.remaining }));
     // After a limit stop the turn Claude could not finish carries on; a switch by choice waits for the person.
     if (reason === 'limit') await $.prompt.submit({ text: 'continue where you left off.' }).catch(() => {});
   } finally {
@@ -529,22 +519,107 @@ async function switchToBackup($) {
   }
 }
 
-// Puts back only what the switch set, so a value the person set since is left alone.
 async function switchBack($) {
-  const backup = await backupState($);
-  if (backup.status === 'on' || backup.status === 'switching') {
-    const { api } = await target($);
-    if ((await $.env.get('ANTHROPIC_BASE_URL')) === `${api}/backup`) {
-      await $.env.set('ANTHROPIC_BASE_URL', undefined);
-      if (BACKUP_KEY_PATTERN.test((await $.env.get('ANTHROPIC_AUTH_TOKEN')) || '')) await $.env.set('ANTHROPIC_AUTH_TOKEN', undefined);
-      if (backup.ownsBetas) await $.env.set('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS', undefined);
-    }
-  }
+  backupKey = undefined;
   await $.state.set(BACKUP, INITIAL_BACKUP);
 }
 
 async function offerBackup($, reason) {
   await $.state.set(BACKUP, { status: 'offer', reason });
+}
+
+async function setBackupNote($, note) {
+  const current = await backupState($);
+  if (current.status === 'on') await $.state.set(BACKUP, defined({ ...current, note }));
+}
+
+// One step to the free model: Claude Code's own request, rebuilt from what a mod can read.
+async function askFreeModel($, e) {
+  const { api } = await target($);
+  const found = e.agentId ? await $.session.messages({ agentId: e.agentId, as: 'api' }) : await $.session.messages({ as: 'api' });
+  if (!Array.isArray(found)) return { note: COPY.backupUnavailable };
+  const tools = (await $.tool.list()).map(tool => ({ name: tool.name, description: tool.description, input_schema: TOOL_SCHEMAS[tool.name] || ANY_INPUT }));
+  const body = JSON.stringify(defined({ model: 'attentionfarm-free', max_tokens: STEP_MAX_TOKENS, system: systemPrompt || undefined, messages: found, tools, stream: false }));
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (!backupKey) {
+      const minted = await mintBackupKey($);
+      if (minted.signedOut) return { note: COPY.sessionEnded };
+      if (minted.note) return { note: minted.note };
+    }
+    let deadline;
+    const timeout = new Promise(resolve => { deadline = $.clock.after(STEP_TIMEOUT_MS, () => resolve(undefined)); });
+    let response;
+    try {
+      response = await Promise.race([$.http.fetch(`${api}/backup/v1/messages`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${backupKey}`, 'content-type': 'application/json', 'anthropic-version': '2023-06-01', 'x-attentionfarm-mod': MOD_VERSION },
+        body,
+      }), timeout]);
+    } catch {
+      response = undefined;
+    } finally {
+      deadline?.cancel();
+    }
+    if (!response) return { note: COPY.network };
+    let data = {};
+    try { data = JSON.parse(response.text) || {}; } catch {}
+    // A key that ended (a new one elsewhere, a logout) is replaced once.
+    if (response.status === 401 && attempt === 0) { backupKey = undefined; continue; }
+    if (response.status === 429 && /used up/.test(data?.error?.message || '')) return { note: COPY.backupUsedUp };
+    if (response.status !== 200) return { note: response.status === 400 ? COPY.backupRejected : COPY.backupBusy };
+    return { data };
+  }
+  return { note: COPY.backupUnavailable };
+}
+
+// Streams a free-model reply into the step as Claude Code's own would arrive: text, tool calls with
+// their arguments, then the stop with what it used. Thinking is shown and not kept.
+async function* answerStep($, e) {
+  const asked = await askFreeModel($, e);
+  if (asked.note) {
+    await setBackupNote($, asked.note);
+    const text = `attentionfarm free backup: ${asked.note}`;
+    yield { kind: 'text', index: 0, text };
+    yield { kind: 'stop', stopReason: 'end_turn', usage: null };
+    return { turnId: e.turnId, index: e.index, answer: text, toolUses: [], stopReason: 'end_turn', usage: null };
+  }
+  const { data } = asked;
+  let answer = '';
+  const toolUses = [];
+  let index = 0;
+  for (const block of Array.isArray(data.content) ? data.content : []) {
+    if (block?.type === 'text' && typeof block.text === 'string' && block.text) {
+      answer += block.text;
+      yield { kind: 'text', index, text: block.text };
+      index += 1;
+    } else if (block?.type === 'thinking' && typeof block.thinking === 'string' && block.thinking) {
+      yield { kind: 'thinking', index, text: block.thinking };
+      index += 1;
+    } else if (block?.type === 'tool_use' && typeof block.name === 'string' && typeof block.id === 'string') {
+      const input = block.input && typeof block.input === 'object' ? block.input : {};
+      freeToolIds.add(block.id);
+      yield { kind: 'tool', index, id: block.id, name: block.name };
+      yield { kind: 'input', index, json: JSON.stringify(input) };
+      toolUses.push({ name: block.name, input });
+      index += 1;
+    }
+  }
+  const stopReason = toolUses.length ? 'tool_use' : STOP_REASONS.has(data.stop_reason) ? data.stop_reason : 'end_turn';
+  const reported = data.usage && typeof data.usage === 'object' ? data.usage : {};
+  const usage = {
+    input_tokens: Number(reported.input_tokens) || 0,
+    output_tokens: Number(reported.output_tokens) || 0,
+    cache_read_input_tokens: Number(reported.cache_read_input_tokens) || 0,
+    cache_creation_input_tokens: Number(reported.cache_creation_input_tokens) || 0,
+    model: typeof data.model === 'string' ? data.model : 'attentionfarm-free',
+  };
+  yield { kind: 'stop', stopReason, usage };
+  try { await update($, TOKENS, tokens => addUsage(tokens, usage)); } catch {}
+  try {
+    const current = await backupState($);
+    if (current.status === 'on') await $.state.set(BACKUP, defined({ ...current, note: undefined, remaining: Number.isInteger(current.remaining) ? Math.max(0, current.remaining - 1) : undefined }));
+  } catch {}
+  return { turnId: e.turnId, index: e.index, answer, toolUses, stopReason, usage };
 }
 
 async function refreshBackup($) {
@@ -775,9 +850,6 @@ export function register(on) {
     const result = await next(e);
     await $.command.register({ name: 'attentionfarm', description: 'sign up, log in, your account, free tokens, and the scrolling status line ticker.' });
     interactive = e.isInteractive;
-    terminalSession = e.isInteractive === true && e.surface === 'terminal';
-    started = true;
-    backupEligible = undefined;
     await syncTicker($);
     // $.state outlives a reload; start every load from unknown so a stale answer is never trusted,
     // unless this load already asked: a terminal can draw the band before session.start runs.
@@ -796,26 +868,35 @@ export function register(on) {
     return result;
   });
 
-  // Counts each model request answered while free backup was on when it started, main loop and
-  // subagents alike, from the usage the response itself reported. A step Claude answered (the switch
-  // did not take) is not free and is not counted. Chunks pass through untouched.
-  on('turn.step', async function* ($, e, next) {
-    let counting = false;
-    try { counting = (await backupState($)).status === 'on'; } catch {}
-    const result = yield* next(e);
-    const usage = result?.usage;
-    if (counting && usage && !/^claude-/i.test(usage.model || '')) {
-      try { await update($, TOKENS, tokens => addUsage(tokens, usage)); } catch {}
-    }
+  // Free backup keeps the system prompt Claude Code composed, to send with each free step.
+  on('prompt.compose', async ($, e, next) => {
+    const result = await next(e);
+    try { systemPrompt = result.sections.map(section => section.text).join('\n\n'); } catch {}
     return result;
   });
 
-  // A limit stop offers free backup; a failure while on backup says the free model is busy or used up.
+  // While free backup is on, the mod answers the step itself and Claude Code sends nothing; otherwise
+  // every chunk passes through untouched. Main loop and subagents alike.
+  on('turn.step', async function* ($, e, next) {
+    let free = false;
+    try { free = (await backupState($)).status === 'on'; } catch {}
+    if (!free) return yield* next(e);
+    return yield* answerStep($, e);
+  });
+
+  // A tool call the free model asked for never runs on an allow it did not earn: an allow becomes an
+  // ask, a deny stays a deny. Claude's own calls keep the person's settings untouched.
+  on('tool.check', async ($, e, next) => {
+    const verdict = await next(e);
+    if (!e.tool_use_id || !freeToolIds.has(e.tool_use_id) || verdict.decision === 'deny') return verdict;
+    return { ...verdict, decision: 'ask', reason: COPY.freeToolAsk };
+  }).catch(() => ({ decision: 'ask', reason: COPY.freeToolAsk }));
+
+  // A limit stop offers free backup.
   on('classic.StopFailure', async ($, e, next) => {
     const result = await next(e);
     const backup = await backupState($);
-    if (backup.status === 'on') await $.state.set(BACKUP, { ...backup, note: COPY.backupBusy });
-    else if (BACKUP_STOPS.has(e.error) && !(await backupBlocked($))) await offerBackup($, 'limit');
+    if (backup.status === 'off' && BACKUP_STOPS.has(e.error)) await offerBackup($, 'limit');
     return result;
   });
 
@@ -850,8 +931,7 @@ export function register(on) {
     if (args === 'account') return { text: (await openAccount($)) ? 'opened.' : COPY.unsupported };
     if (args === 'free' || args === 'backup') {
       if ((await backupState($)).status === 'on') return { text: 'free tokens are already on. use back to claude in the band to switch back.' };
-      const blocked = await backupBlocked($);
-      if (blocked) return { text: blocked };
+      if (!(await usableAccount($))) return { text: COPY.unsupported };
       await offerBackup($, 'manual');
       return { text: 'opened.' };
     }
@@ -877,9 +957,7 @@ export function register(on) {
     const backup = await backupState($);
     const { value: tokens = NO_TOKENS } = await $.state.get(TOKENS);
     const used = tokenTotal(tokens);
-    // Worked out once per load, after session.start says whether this is an interactive terminal.
-    if (started && backupEligible === undefined) backupEligible = !(await backupBlocked($).catch(() => COPY.backupTerminalOnly));
-    const canBackup = e.surface === 'terminal' && backupEligible === true;
+    const canBackup = LOGIN_SURFACES.has(e.surface);
     if (LOGIN_SURFACES.has(e.surface)) {
       bandRequestId = e.requestId;
       if (account.status === 'unknown') ensureRestore($);

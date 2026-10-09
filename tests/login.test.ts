@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing';
 import type { On } from 'claude-code';
+import { TOOL_SCHEMAS } from '../hooks/tool-schemas.mjs';
 
 const API = 'https://api.attentionfarm.com/api/mod';
 const TOKEN = `afm_${'A'.repeat(43)}`;
@@ -8,6 +9,10 @@ const MASKED = 'y•••@example.com';
 const CODE = '482913';
 const CHALLENGE = `mch_${'c'.repeat(24)}`;
 const BACKUP_KEY = `afb_${'B'.repeat(43)}`;
+const CONVERSATION = [{ role: 'user', content: [{ type: 'text', text: 'list the files' }] }];
+const FREE_USAGE = { input_tokens: 1200, output_tokens: 300, cache_read_input_tokens: 400, cache_creation_input_tokens: 0 };
+const FREE_REPLY = { id: 'gen-1', type: 'message', role: 'assistant', model: 'nvidia/nemotron-3-ultra-550b-a55b:free', content: [{ type: 'thinking', thinking: 'let me look' }, { type: 'text', text: 'here they are' }], stop_reason: 'end_turn', usage: FREE_USAGE };
+const FREE_TOOL_REPLY = { ...FREE_REPLY, content: [{ type: 'tool_use', id: 'toolu_free_1', name: 'Bash', input: { command: 'ls', description: 'list files' } }], stop_reason: 'tool_use' };
 const SURFACES = ['terminal', 'desktop'] as const;
 const BAND = { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {} } as const;
 const PANE_PROPS = { title: 'attentionfarm', isFocused: true, bodyColumns: 80, placement: 'inline', scroll: { offset: 0, bodyRows: 8 }, view: {} } as const;
@@ -18,29 +23,32 @@ const ALLOWED_KEYS: Record<string, string[]> = {
   '/account': ['confirm'],
   '/me': [],
   '/backup/key': [],
+  '/backup/v1/messages': ['model', 'max_tokens', 'system', 'messages', 'tools', 'stream'],
   '/backup/status': [],
 };
 
 type Reply = { status: number; body?: unknown } | 'offline';
 type Sent = { path: string; method: string; headers: Record<string, string>; body?: Record<string, unknown> };
 
-function world(on: On, options: { keychain?: { token: string; comment: string }; replies?: Record<string, Reply | Reply[]>; security?: boolean; env?: Record<string, string>; settings?: Record<string, unknown> } = {}) {
+function world(on: On, options: { keychain?: { token: string; comment: string }; replies?: Record<string, Reply | Reply[]>; security?: boolean; toolCheck?: Record<string, unknown> } = {}) {
   const clock = mock.clock(on, { now: 1_000_000 });
-  const env: Record<string, string> = { ...options.env };
+  mock.env(on, {});
   const submitted: string[] = [];
-  on('env.get', ($, e) => ({ value: env[e.name] }));
-  on('env.set', ($, e) => { if (e.value === undefined) delete env[e.name]; else env[e.name] = e.value; return { value: undefined }; });
-  on('settings.read', () => ({ value: options.settings ?? {} }));
   on('prompt.submit', ($, e) => { submitted.push(e.text); return { text: e.text, context: [] } as any; });
   on('classic.StopFailure', () => ({}));
-  // The model beneath every step: answers with the usage the test queues (Nemotron by default).
-  const usages: any[] = [];
-  on('turn.step', async function* ($: any, e: any) {
-    const usage = usages.shift() ?? null;
-    yield { kind: 'text', index: 0, text: 'ok' };
-    return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage };
-  } as any);
   on('classic.Stop', () => ({}));
+  // Claude's own model beneath every step: counts the requests the engine would have sent.
+  const engine = { steps: 0 };
+  on('turn.step', async function* ($: any, e: any) {
+    engine.steps += 1;
+    yield { kind: 'text', index: 0, text: 'claude answered' };
+    return { turnId: e.turnId, index: e.index, answer: 'claude answered', toolUses: [], stopReason: 'end_turn', usage: null };
+  } as any);
+  // What a free step reads: the conversation, the system prompt and the tools.
+  on('session.messages', () => ({ value: CONVERSATION }) as any);
+  on('tool.list', () => ({ value: [{ name: 'Bash', description: 'runs a command', mcp: false }, { name: 'mcp__docs__search', description: 'searches docs', mcp: true }] }) as any);
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'SYSTEM PROMPT', scope: 'shared' }] }) as any);
+  on('tool.check', () => (options.toolCheck ?? { decision: 'allow' }) as any);
   const sent: Sent[] = [];
   const toasts: string[] = [];
   const opened: string[] = [];
@@ -57,6 +65,7 @@ function world(on: On, options: { keychain?: { token: string; comment: string };
     '/auth/logout': { status: 200, body: { revoked: 1 } },
     '/account': { status: 200, body: { deleted: true } },
     '/backup/key': { status: 200, body: { key: BACKUP_KEY, base_path: '/api/mod/backup', model: { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', label: 'nemotron 3 ultra' }, daily_requests: 100, remaining_today: 100 } },
+    '/backup/v1/messages': { status: 200, body: FREE_REPLY },
     '/backup/status': { status: 200, body: { available: true, model: { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', label: 'nemotron 3 ultra' }, daily_requests: 100, remaining_today: 87 } },
     ...options.replies,
   };
@@ -96,7 +105,7 @@ function world(on: On, options: { keychain?: { token: string; comment: string };
     const hex = [...new TextEncoder().encode(keychain.comment)].map(b => b.toString(16).padStart(2, '0').toUpperCase()).join('');
     return { value: { exitCode: 0, stdout: `    "icmt"<blob>=0x${hex}  "escaped"\n`, stderr: '' } };
   });
-  return { clock, sent, toasts, opened, closed, focused, runs, written, env, submitted, usages, keychain: () => keychain };
+  return { clock, sent, toasts, opened, closed, focused, runs, written, submitted, engine, keychain: () => keychain };
 }
 
 async function start($: any, clock: { advance: (ms: number) => Promise<void> }, surface: 'terminal' | 'desktop' = 'terminal') {
@@ -411,79 +420,120 @@ test('desktop: every step has the same shape (quiet close, full-width field, one
 
 const LIMIT = { error: 'rate_limit' } as const;
 
+async function step($: any, extra: Record<string, unknown> = {}) {
+  const stream = $.turn.step({ turnId: 'turn-1', index: 0, model: 'claude-opus-5-5', messageCount: 1, ...extra });
+  const chunks = [];
+  for (let read = await stream.next(); ; read = await stream.next()) {
+    if (read.done) return { chunks, result: read.value };
+    chunks.push(read.value);
+  }
+}
 
-test('backup: a limit stop offers it, the switch points this process at attentionfarm, and back puts claude back', async ($, on) => {
-  const { clock, sent, env, submitted, written } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
-  await start($, clock);
+async function freeOn($: any, view: any) {
   await $.classic.StopFailure(LIMIT);
-  const view = await band($, 'terminal');
-  expect(await view.find({ type: 'Text', text: 'you hit your claude limit.' })).toBeDefined();
-  expect(await view.find({ type: 'Text', text: "free models' hosts may learn from what they receive." })).toBeDefined();
-  expect((await view.find({ type: 'Button', key: 'attentionfarm-backup-on', text: 'continue free' }))?.props.variant).toBe('secondary');
   await view.press({ key: 'attentionfarm-backup-on' });
-  const keyCall = sent.find(request => request.path === '/backup/key')!;
-  expect(keyCall).toMatchObject({ method: 'POST', headers: { authorization: `Bearer ${TOKEN}`, 'x-attentionfarm-mod': '0.3.0' } });
-  expect(env).toEqual({ ANTHROPIC_BASE_URL: `${API}/backup`, ANTHROPIC_AUTH_TOKEN: BACKUP_KEY, CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1' });
-  expect(submitted).toEqual(['continue where you left off.']);
-  expect(await view.find({ type: 'Text', text: 'free backup' })).toBeDefined();
-  expect(await view.find({ type: 'Text', text: 'nemotron 3 ultra · 0 tokens this session · 100 requests left today' })).toBeDefined();
-  // A finished turn refreshes the count.
-  await $.classic.Stop({ stop_hook_active: false });
-  expect(await view.find({ type: 'Text', text: 'nemotron 3 ultra · 0 tokens this session · 87 requests left today' })).toBeDefined();
-  // A failure while on backup says so; the next finished turn clears it.
-  await $.classic.StopFailure(LIMIT);
-  expect(await view.find({ type: 'Text', text: "the free model is busy, or today's free backup is used up." })).toBeDefined();
-  await $.classic.Stop({ stop_hook_active: false });
-  expect(await view.find({ type: 'Text', text: "the free model is busy, or today's free backup is used up." })).toBeUndefined();
-  await view.press({ key: 'attentionfarm-backup-off' });
-  expect(env).toEqual({});
-  expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
-  stateHasNoSecrets([written]);
-});
+}
 
-test('backup: switching back leaves alone what the person had set themselves', async ($, on) => {
-  const { clock, env } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
-  await start($, clock);
-  await $.classic.StopFailure(LIMIT);
-  env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = '1';
-  const view = await band($, 'terminal');
-  await view.press({ key: 'attentionfarm-backup-on' });
-  await view.press({ key: 'attentionfarm-backup-off' });
-  expect(env).toEqual({ CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1' });
-});
-
-test('backup: logging out ends it', async ($, on) => {
-  const { clock, env } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
-  await start($, clock);
-  await $.classic.StopFailure({ error: 'billing_error' });
-  const view = await band($, 'terminal');
-  await view.press({ key: 'attentionfarm-backup-on' });
-  expect(env.ANTHROPIC_AUTH_TOKEN).toBe(BACKUP_KEY);
-  await $.command.run({ command: 'attentionfarm', args: 'logout' });
-  expect(env).toEqual({});
-});
-
-const BLOCKED = [
-  ['the desktop app', 'desktop', {}],
-  ['a hosted login', 'terminal', { env: { CLAUDE_CODE_SIMPLE: '1' } }],
-  ['another entrypoint', 'terminal', { env: { CLAUDE_CODE_ENTRYPOINT: 'claude-desktop' } }],
-  ['a cloud provider', 'terminal', { env: { CLAUDE_CODE_USE_BEDROCK: '1' } }],
-  ['their own api key', 'terminal', { env: { ANTHROPIC_API_KEY: 'sk-ant-api03-own-key' } }],
-  ['their own gateway', 'terminal', { env: { ANTHROPIC_BASE_URL: 'https://gateway.example' } }],
-  ['a key helper', 'terminal', { settings: { apiKeyHelper: '/bin/echo key' } }],
-] as const;
-for (const [name, surface, extra] of BLOCKED) {
-  test(`backup: never offered with ${name}, where the switch could send someone's own credential`, async ($, on) => {
-    const scoped = world(on, { keychain: { token: TOKEN, comment: MASKED }, ...extra });
-    await start($, scoped.clock, surface);
-    await $.classic.StopFailure(LIMIT);
+for (const surface of SURFACES) {
+  test(`free backup on ${surface}: the mod answers the step itself, claude sends nothing, and the band counts the tokens`, async ($, on) => {
+    const { clock, sent, submitted, engine, written } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
+    await start($, clock, surface);
     const view = await band($, surface);
-    expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-on' })).toBeUndefined();
-    expect(scoped.sent.some(request => request.path === '/backup/key')).toBe(false);
+    await $.classic.StopFailure(LIMIT);
+    expect(await view.find({ type: 'Text', text: 'you hit your claude limit.' })).toBeDefined();
+    await view.press({ key: 'attentionfarm-backup-on' });
+    expect(submitted).toEqual(['continue where you left off.']);
+    expect(await view.find({ type: 'Text', text: 'nemotron 3 ultra · 0 tokens this session · 100 requests left today' })).toBeDefined();
+    await $.prompt.compose({ model: 'claude-opus-5-5', promptModel: 'claude-opus-5-5', surfaces: [surface], tools: ['Bash'], outputStyle: null, traits: [] });
+    const { chunks, result } = await step($);
+    expect(engine.steps).toBe(0);
+    const asked = sent.find(request => request.path === '/backup/v1/messages')!;
+    expect(asked.headers.authorization).toBe(`Bearer ${BACKUP_KEY}`);
+    expect(asked.body).toMatchObject({ system: 'SYSTEM PROMPT', messages: CONVERSATION, stream: false });
+    expect((asked.body as any).tools).toEqual([
+      { name: 'Bash', description: 'runs a command', input_schema: TOOL_SCHEMAS.Bash },
+      { name: 'mcp__docs__search', description: 'searches docs', input_schema: { type: 'object', additionalProperties: true } },
+    ]);
+    expect(chunks).toEqual([
+      { kind: 'thinking', index: 0, text: 'let me look' },
+      { kind: 'text', index: 1, text: 'here they are' },
+      { kind: 'stop', stopReason: 'end_turn', usage: { ...FREE_USAGE, model: 'nvidia/nemotron-3-ultra-550b-a55b:free' } },
+    ]);
+    expect(result).toMatchObject({ answer: 'here they are', toolUses: [], stopReason: 'end_turn' });
+    expect(await view.find({ type: 'Text', text: 'nemotron 3 ultra · 1.9k tokens this session · 99 requests left today' })).toBeDefined();
+    await view.press({ key: 'attentionfarm-backup-off' });
+    await step($);
+    expect(engine.steps).toBe(1);
+    expect(await view.find({ type: 'Text', text: '1.9k free tokens this session' })).toBeDefined();
+    stateHasNoSecrets([written]);
   });
 }
 
-test('backup: other stops do not offer it, and not now dismisses it', async ($, on) => {
+test('free backup: a tool call the free model asks for is always put to the person, never allowed silently', async ($, on) => {
+  const { clock } = world(on, { keychain: { token: TOKEN, comment: MASKED }, replies: { '/backup/v1/messages': { status: 200, body: FREE_TOOL_REPLY } } });
+  await start($, clock);
+  const view = await band($, 'terminal');
+  await freeOn($, view);
+  const { chunks, result } = await step($);
+  expect(chunks.slice(0, 2)).toEqual([
+    { kind: 'tool', index: 0, id: 'toolu_free_1', name: 'Bash' },
+    { kind: 'input', index: 0, json: JSON.stringify({ command: 'ls', description: 'list files' }) },
+  ]);
+  expect(result).toMatchObject({ stopReason: 'tool_use', toolUses: [{ name: 'Bash', input: { command: 'ls', description: 'list files' } }] });
+  const free = await $.tool.check({ tool: 'Bash', input: { command: 'ls' }, tool_use_id: 'toolu_free_1' } as any);
+  expect(free).toMatchObject({ decision: 'ask', reason: 'the free model (through attentionfarm) asked for this. check it before allowing.' });
+  // Claude's own calls keep the person's settings.
+  expect(await $.tool.check({ tool: 'Bash', input: { command: 'ls' }, tool_use_id: 'toolu_claude_1' } as any)).toMatchObject({ decision: 'allow' });
+});
+
+test('free backup: a deny stays a deny for the free model too', async ($, on) => {
+  const { clock } = world(on, { keychain: { token: TOKEN, comment: MASKED }, replies: { '/backup/v1/messages': { status: 200, body: FREE_TOOL_REPLY } }, toolCheck: { decision: 'deny', reason: 'blocked by a rule' } });
+  await start($, clock);
+  const view = await band($, 'terminal');
+  await freeOn($, view);
+  await step($);
+  expect(await $.tool.check({ tool: 'Bash', input: { command: 'ls' }, tool_use_id: 'toolu_free_1' } as any)).toMatchObject({ decision: 'deny' });
+});
+
+test('free backup: busy and used-up answers say so in the step and the band, and a good step clears it', async ($, on) => {
+  const { clock } = world(on, { keychain: { token: TOKEN, comment: MASKED }, replies: { '/backup/v1/messages': [
+    { status: 529, body: { type: 'error', error: { type: 'overloaded_error', message: 'busy' } } },
+    { status: 429, body: { type: 'error', error: { type: 'rate_limit_error', message: "today's free attentionfarm backup is used up. it resets at midnight utc." } } },
+    { status: 200, body: FREE_REPLY },
+  ] } });
+  await start($, clock);
+  const view = await band($, 'terminal');
+  await freeOn($, view);
+  const busy = await step($);
+  expect(busy.result).toMatchObject({ answer: 'attentionfarm free backup: the free model is busy right now. try again in a minute, or switch back to claude.', usage: null });
+  expect(await view.find({ type: 'Text', text: 'the free model is busy right now. try again in a minute, or switch back to claude.' })).toBeDefined();
+  const usedUp = await step($);
+  expect(usedUp.result.answer).toBe("attentionfarm free backup: today's free requests are used up. they reset at midnight utc; switch back to claude meanwhile.");
+  await step($);
+  expect(JSON.stringify(await view.drawn())).not.toMatch(/used up|busy right now/);
+});
+
+test('free backup: a key that ended is replaced once', async ($, on) => {
+  const { clock, sent } = world(on, { keychain: { token: TOKEN, comment: MASKED }, replies: { '/backup/v1/messages': [{ status: 401, body: {} }, { status: 200, body: FREE_REPLY }] } });
+  await start($, clock);
+  const view = await band($, 'terminal');
+  await freeOn($, view);
+  const { result } = await step($);
+  expect(result.answer).toBe('here they are');
+  expect(sent.filter(request => request.path === '/backup/key')).toHaveLength(2);
+});
+
+test('free backup: logging out ends it and the next step goes to claude', async ($, on) => {
+  const { clock, engine } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
+  await start($, clock);
+  const view = await band($, 'terminal');
+  await freeOn($, view);
+  await $.command.run({ command: 'attentionfarm', args: 'logout' });
+  await step($);
+  expect(engine.steps).toBe(1);
+});
+
+test('free backup: other stops do not offer it, and not now dismisses it', async ($, on) => {
   const { clock } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, clock);
   await $.classic.StopFailure({ error: 'invalid_request' });
@@ -495,107 +545,39 @@ test('backup: other stops do not offer it, and not now dismisses it', async ($, 
   expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-on' })).toBeUndefined();
 });
 
-test('backup: logged out, the offer asks for sign-up first; an unavailable service changes nothing', async ($, on) => {
+test('free backup: logged out, the offer asks for sign-up first; an unavailable service changes nothing', async ($, on) => {
   const out = world(on, { replies: { '/backup/key': { status: 503, body: { error: { code: 'backup_unavailable', message: 'x' } } } } });
   await start($, out.clock);
   await $.classic.StopFailure(LIMIT);
   const view = await band($, 'terminal');
-  await view.press({ key: 'attentionfarm-backup-on', });
+  await view.press({ key: 'attentionfarm-backup-on' });
   expect(await view.find({ type: 'Input', key: 'attentionfarm-email' })).toBeDefined();
   await view.input({ key: 'attentionfarm-email', text: EMAIL });
   await view.input({ key: 'attentionfarm-code', text: CODE });
   await out.clock.advance(5_000);
-  expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-on', text: 'continue free' })).toBeDefined();
   await view.press({ key: 'attentionfarm-backup-on' });
   expect(await view.find({ type: 'Text', text: "free backup isn't available right now." })).toBeDefined();
-  expect(out.env).toEqual({});
   expect(out.submitted).toEqual([]);
-});
-
-const FREE = (input: number, output: number, extra: Record<string, unknown> = {}) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'nvidia/nemotron-3-ultra-550b-a55b:free', ...extra });
-
-async function step($: any, extra: Record<string, unknown> = {}) {
-  const stream = $.turn.step({ turnId: 'turn-1', index: 0, model: 'claude-opus-5-5', messageCount: 3, ...extra });
-  const chunks = [];
-  for (let read = await stream.next(); ; read = await stream.next()) {
-    if (read.done) return { chunks, result: read.value };
-    chunks.push(read.value);
-  }
-}
-
-test('backup tokens: counted locally per request while backup is on, kept after switching back, reset by /clear', async ($, on) => {
-  const { clock, usages } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
-  await start($, clock);
-  const view = await band($, 'terminal');
-  // Before backup: Claude's own steps are never counted.
-  usages.push(FREE(5000, 100, { model: 'claude-opus-5-5' }));
-  const plain = await step($);
-  expect(plain.chunks).toEqual([{ kind: 'text', index: 0, text: 'ok' }]);
-  expect(JSON.stringify(await view.drawn())).not.toMatch(/tokens this session/);
-  await $.classic.StopFailure(LIMIT);
-  await view.press({ key: 'attentionfarm-backup-on' });
-  expect(await view.find({ type: 'Text', text: 'nemotron 3 ultra · 0 tokens this session · 100 requests left today' })).toBeDefined();
-  // Main loop and a subagent, cache tokens included; a step Claude still answered is not free.
-  usages.push(FREE(1200, 300, { cache_read_input_tokens: 400 }), FREE(800, 200), FREE(9999, 1, { model: 'claude-opus-5-5' }));
   await step($);
-  await step($, { agentId: 'agent-1' });
-  const passed = await step($);
-  expect(passed.result.usage.model).toBe('claude-opus-5-5');
-  expect(await view.find({ type: 'Text', text: 'nemotron 3 ultra · 2.9k tokens this session · 100 requests left today' })).toBeDefined();
-  // A step with no usage counts nothing.
-  await step($);
-  await view.press({ key: 'attentionfarm-backup-off' });
-  expect(await view.find({ type: 'Text', text: '2.9k free tokens this session' })).toBeDefined();
-  expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
-  // Back on claude: nothing more is added.
-  usages.push(FREE(70000, 10));
-  await step($);
-  expect(await view.find({ type: 'Text', text: '2.9k free tokens this session' })).toBeDefined();
-  await $.classic.SessionStart({ source: 'clear' });
-  expect(JSON.stringify(await view.drawn())).not.toMatch(/tokens this session/);
-});
-
-test('backup tokens: a step that started on backup counts even if the person switches back mid-answer', async ($, on) => {
-  const { clock, usages } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
-  await start($, clock);
-  await $.classic.StopFailure(LIMIT);
-  const view = await band($, 'terminal');
-  await view.press({ key: 'attentionfarm-backup-on' });
-  usages.push(FREE(1_234_000, 5_000));
-  const stream = $.turn.step({ turnId: 'turn-2', index: 0, model: 'claude-opus-5-5', messageCount: 3 });
-  const first = await stream.next();
-  expect(first.value).toEqual({ kind: 'text', index: 0, text: 'ok' });
-  await view.press({ key: 'attentionfarm-backup-off' });
-  while (!(await stream.next()).done) {}
-  expect(await view.find({ type: 'Text', text: '1.2m free tokens this session' })).toBeDefined();
+  expect(out.engine.steps).toBe(1);
 });
 
 test('free tokens by choice: the band button and /attentionfarm free offer it without a limit, and nothing is sent for the person', async ($, on) => {
-  const { clock, env, submitted, sent } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
-  await start($, clock);
-  const view = await band($, 'terminal');
+  const { clock, submitted, engine } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
+  await start($, clock, 'desktop');
+  const view = await band($, 'desktop');
   await view.press({ key: 'attentionfarm-free' });
   expect(await view.find({ type: 'Text', text: 'use free tokens instead of claude?' })).toBeDefined();
   expect(await view.find({ type: 'Text', text: "free models' hosts may learn from what they receive." })).toBeDefined();
-  expect(await view.find({ type: 'Button', key: 'attentionfarm-free' })).toBeUndefined();
   await view.press({ key: 'attentionfarm-backup-dismiss' });
   expect(await $.command.run({ command: 'attentionfarm', args: 'free' })).toMatchObject({ text: 'opened.' });
   await view.press({ key: 'attentionfarm-backup-on' });
-  expect(sent.some(request => request.path === '/backup/key')).toBe(true);
-  expect(env.ANTHROPIC_AUTH_TOKEN).toBe(BACKUP_KEY);
   expect(submitted).toEqual([]);
-  expect(await view.find({ type: 'Text', text: 'free backup' })).toBeDefined();
   expect(await $.command.run({ command: 'attentionfarm', args: 'free' })).toMatchObject({ text: 'free tokens are already on. use back to claude in the band to switch back.' });
+  await step($);
+  expect(engine.steps).toBe(0);
   await view.press({ key: 'attentionfarm-backup-off' });
   expect(await view.find({ type: 'Button', key: 'attentionfarm-free', text: 'use free tokens' })).toBeDefined();
-});
-
-test('free tokens by choice: no button on desktop or logged out, and the command explains why', async ($, on) => {
-  const { clock } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
-  await start($, clock, 'desktop');
-  const view = await band($, 'desktop');
-  expect(await view.find({ type: 'Button', key: 'attentionfarm-free' })).toBeUndefined();
-  expect(await $.command.run({ command: 'attentionfarm', args: 'free' })).toMatchObject({ text: 'free backup works in claude code in a terminal for now.' });
 });
 
 test('free tokens by choice: no button while logged out', async ($, on) => {
@@ -604,6 +586,18 @@ test('free tokens by choice: no button while logged out', async ($, on) => {
   const view = await band($, 'terminal');
   expect(await view.find({ type: 'Button', key: 'attentionfarm-signup' })).toBeDefined();
   expect(await view.find({ type: 'Button', key: 'attentionfarm-free' })).toBeUndefined();
+});
+
+test('free tokens: /clear starts the count again', async ($, on) => {
+  const { clock } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
+  await start($, clock);
+  const view = await band($, 'terminal');
+  await freeOn($, view);
+  await step($);
+  await view.press({ key: 'attentionfarm-backup-off' });
+  expect(await view.find({ type: 'Text', text: '1.9k free tokens this session' })).toBeDefined();
+  await $.classic.SessionStart({ source: 'clear' });
+  expect(JSON.stringify(await view.drawn())).not.toMatch(/tokens this session/);
 });
 
 test('terminal: a band drawn before session.start still ends up offering sign up', async ($, on) => {
