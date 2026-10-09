@@ -410,6 +410,7 @@ test('desktop: every step has the same shape (quiet close, full-width field, one
 // --- free backup -------------------------------------------------------------
 
 const LIMIT = { error: 'rate_limit' } as const;
+const USAGE_TEXT = 'use /attentionfarm signup, login, account or logout, or /attentionfarm ticker on, off, pause or resume.';
 
 test('backup: a limit stop offers it, the switch points this process at attentionfarm, and back puts claude back', async ($, on) => {
   const { clock, sent, env, submitted, written } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
@@ -567,4 +568,12 @@ test('backup tokens: a step that started on backup counts even if the person swi
   await view.press({ key: 'attentionfarm-backup-off' });
   while (!(await stream.next()).done) {}
   expect(await view.find({ type: 'Text', text: '1.2m free tokens this session' })).toBeDefined();
+});
+
+test('backup: the local-only offer command does nothing against production', async ($, on) => {
+  const { clock } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
+  await start($, clock);
+  expect(await $.command.run({ command: 'attentionfarm', args: 'backup' })).toMatchObject({ text: USAGE_TEXT });
+  const view = await band($, 'terminal');
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-on' })).toBeUndefined();
 });

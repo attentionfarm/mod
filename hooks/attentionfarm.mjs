@@ -825,6 +825,13 @@ export function register(on) {
       return { text: (await openFlow($, args.startsWith('sign') ? 'signup' : 'login')) ? 'opened.' : COPY.unsupported };
     }
     if (args === 'account') return { text: (await openAccount($)) ? 'opened.' : COPY.unsupported };
+    // Local testing only: shows the backup offer without waiting for a real limit stop.
+    if (args === 'backup' && (await target($)).dev) {
+      const blocked = await backupBlocked($);
+      if (blocked) return { text: blocked };
+      await $.state.set(BACKUP, { status: 'offer' });
+      return { text: 'free backup offered (local worker only).' };
+    }
     if (args === 'logout' || args === 'log out') {
       if (!(await usableAccount($))) return { text: COPY.unsupported };
       await logout($);
