@@ -757,8 +757,9 @@ export function register(on) {
     interactive = e.isInteractive;
     terminalSession = e.isInteractive === true && e.surface === 'terminal';
     await syncTicker($);
-    // $.state outlives a reload; start every load from unknown so a stale answer is never trusted.
-    await $.state.set(ACCOUNT, INITIAL_ACCOUNT);
+    // $.state outlives a reload; start every load from unknown so a stale answer is never trusted,
+    // unless this load already asked: a terminal can draw the band before session.start runs.
+    if (!restoring) await $.state.set(ACCOUNT, INITIAL_ACCOUNT);
     if (e.isInteractive && LOGIN_SURFACES.has(e.surface)) ensureRestore($);
     return result;
   });

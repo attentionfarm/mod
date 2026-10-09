@@ -577,3 +577,12 @@ test('backup: the local-only offer command does nothing against production', asy
   const view = await band($, 'terminal');
   expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-on' })).toBeUndefined();
 });
+
+test('terminal: a band drawn before session.start still ends up offering sign up', async ($, on) => {
+  const { clock } = world(on);
+  const early = await band($, 'terminal', 'early');
+  await clock.advance(0);
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true });
+  await clock.advance(0);
+  expect(await early.find({ type: 'Button', key: 'attentionfarm-signup', text: 'sign up or log in' })).toBeDefined();
+});
