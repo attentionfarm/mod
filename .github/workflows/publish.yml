@@ -1,11 +1,9 @@
 name: publish attentionfarm mod
+# Started only by `node scripts/as-app.mjs dispatch`, so the run is attributed
+# to the attentionfarm app. A manual run would show the person who clicked it.
 on:
-  workflow_dispatch:
-    inputs:
-      clean_history:
-        description: replace history and old release pages with a bot-authored snapshot
-        type: boolean
-        default: false
+  repository_dispatch:
+    types: [publish]
 permissions:
   contents: write
 concurrency:
@@ -21,7 +19,7 @@ jobs:
       - name: build and inspect the installable zip
         run: python3 scripts/build-release.py
       - name: publish the bot snapshot
-        if: inputs.clean_history
+        if: github.event.client_payload.clean_history == true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -43,4 +41,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create v0.1.4 dist/attentionfarm-mod-v0.1.4.zip dist/attentionfarm-mod-v0.1.4.zip.sha256 --target "$(git rev-parse HEAD)" --title 'attentionfarm mod v0.1.4' --notes 'a clickable powered by attentionfarm label and a cli ticker: watch ad, get tokens | attentionfarm |. clicking opens the email waitlist. ads and token earning are coming soon. macos; requires native claude code mod support.'
+          version="v$(jq -r .version .claude-plugin/plugin.json)"
+          if gh release view "$version" >/dev/null 2>&1; then
+            echo "release $version already exists"
+            exit 0
+          fi
+          gh release create "$version" "dist/attentionfarm-mod-$version.zip" "dist/attentionfarm-mod-$version.zip.sha256" --target "$(git rev-parse HEAD)" --title "attentionfarm mod $version" --notes 'a clickable powered by attentionfarm label and a cli ticker: watch ad, get tokens | attentionfarm |. clicking opens the email waitlist. ads and token earning are coming soon. macos; requires native claude code mod support.'
