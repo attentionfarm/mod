@@ -3,8 +3,8 @@ import type { On } from 'claude-code';
 
 const API = 'https://api.attentionfarm.com/api/mod';
 const TOKEN = `afm_${'A'.repeat(43)}`;
-const EMAIL = 'nehal@example.com';
-const MASKED = 'n•••@example.com';
+const EMAIL = 'you@example.com';
+const MASKED = 'y•••@example.com';
 const CODE = '482913';
 const CHALLENGE = `mch_${'c'.repeat(24)}`;
 const SURFACES = ['terminal', 'desktop'] as const;
@@ -127,7 +127,7 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(await view.find({ type: 'Button', text: '[ ] also email me when earning launches' })).toBeDefined();
   await view.press({ key: 'attentionfarm-updates' });
   expect(await view.find({ type: 'Button', text: '[x] also email me when earning launches' })).toBeDefined();
-  await view.input({ key: 'attentionfarm-email', text: '  Nehal@Example.com ' });
+  await view.input({ key: 'attentionfarm-email', text: '  You@Example.com ' });
   expect(sent[0]).toMatchObject({ path: '/auth/start', method: 'POST', body: { email: EMAIL, intent: 'signup', updates: true } });
   expect(await view.find({ type: 'Text', text: `check ${MASKED} for a 6-digit code` })).toBeDefined();
   expect((await view.find({ type: 'Input', key: 'attentionfarm-code' }))?.props.autoFocus).toBe(true);
