@@ -567,7 +567,9 @@ async function askFreeModel($, e) {
     if (response.status === 401 && attempt === 0) { backupKey = undefined; continue; }
     if (response.status === 429 && /used up/.test(data?.error?.message || '')) return { note: COPY.backupUsedUp };
     if (response.status !== 200) return { note: response.status === 400 ? COPY.backupRejected : COPY.backupBusy };
-    return { data };
+    // Which free model of attentionfarm's roster answered.
+    const label = String(response.headers?.['x-attentionfarm-model-label'] || '').toLowerCase().slice(0, 40) || undefined;
+    return { data, label };
   }
   return { note: COPY.backupUnavailable };
 }
@@ -583,7 +585,7 @@ async function* answerStep($, e) {
     yield { kind: 'stop', stopReason: 'end_turn', usage: null };
     return { turnId: e.turnId, index: e.index, answer: text, toolUses: [], stopReason: 'end_turn', usage: null };
   }
-  const { data } = asked;
+  const { data, label } = asked;
   let answer = '';
   const toolUses = [];
   let index = 0;
@@ -617,7 +619,7 @@ async function* answerStep($, e) {
   try { await update($, TOKENS, tokens => addUsage(tokens, usage)); } catch {}
   try {
     const current = await backupState($);
-    if (current.status === 'on') await $.state.set(BACKUP, defined({ ...current, note: undefined, remaining: Number.isInteger(current.remaining) ? Math.max(0, current.remaining - 1) : undefined }));
+    if (current.status === 'on') await $.state.set(BACKUP, defined({ ...current, note: undefined, label: label || current.label, remaining: Number.isInteger(current.remaining) ? Math.max(0, current.remaining - 1) : undefined }));
   } catch {}
   return { turnId: e.turnId, index: e.index, answer, toolUses, stopReason, usage };
 }

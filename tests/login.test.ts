@@ -27,7 +27,7 @@ const ALLOWED_KEYS: Record<string, string[]> = {
   '/backup/status': [],
 };
 
-type Reply = { status: number; body?: unknown } | 'offline';
+type Reply = { status: number; body?: unknown; headers?: Record<string, string> } | 'offline';
 type Sent = { path: string; method: string; headers: Record<string, string>; body?: Record<string, unknown> };
 
 function world(on: On, options: { keychain?: { token: string; comment: string }; replies?: Record<string, Reply | Reply[]>; security?: boolean; toolCheck?: Record<string, unknown> } = {}) {
@@ -87,7 +87,7 @@ function world(on: On, options: { keychain?: { token: string; comment: string };
     const queued = replies[path];
     const reply = Array.isArray(queued) ? queued.shift() ?? queued[0] : queued;
     if (!reply || reply === 'offline') return { deny: 'network down' };
-    return { value: { status: reply.status, ok: reply.status < 300, headers: {}, text: JSON.stringify(reply.body ?? {}) } };
+    return { value: { status: reply.status, ok: reply.status < 300, headers: reply.headers ?? {}, text: JSON.stringify(reply.body ?? {}) } };
   });
   on('process.run', ($, e) => {
     const argv = [...e.argv];
@@ -607,4 +607,13 @@ test('terminal: a band drawn before session.start still ends up offering sign up
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true });
   await clock.advance(0);
   expect(await early.find({ type: 'Button', key: 'attentionfarm-signup', text: 'sign up or log in' })).toBeDefined();
+});
+
+test('free backup: the band names the roster model that answered', async ($, on) => {
+  const { clock } = world(on, { keychain: { token: TOKEN, comment: MASKED }, replies: { '/backup/v1/messages': { status: 200, body: FREE_REPLY, headers: { 'x-attentionfarm-model-label': 'inkling' } } } });
+  await start($, clock);
+  const view = await band($, 'terminal');
+  await freeOn($, view);
+  await step($);
+  expect(await view.find({ type: 'Text', text: 'inkling · 1.9k tokens this session · 99 requests left today' })).toBeDefined();
 });
