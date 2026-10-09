@@ -2,11 +2,9 @@
 
 **log in** or **sign up** for attentionfarm without leaving claude code: type your email, then the 6-digit code we send you. no password, no browser.
 
-above your prompt, a two-line band with a tide outline: the **attentionfarm** wordmark and **sign up or log in**, then "earning isn't live yet. sign up to hold your spot." once you're in, it shows your masked email (`n•••@gmail.com`); click it for your account.
+above your prompt, a two-line band with a tide outline: the **attentionfarm** wordmark and **sign up or log in**, then "watch an ad, get tokens for claude code." once you're in, it shows your masked email (`n•••@gmail.com`); click it for your account.
 
 the cli status line scrolls: **watch ad, get tokens | attentionfarm |**.
-
-ads and token earning aren't live yet. an account today only holds your spot for when earning opens.
 
 ## install
 
@@ -45,10 +43,10 @@ login works in the claude code terminal on macos. on desktop the mod shows the l
 what is stored, and where:
 
 - **on your mac:** a session key in your macos login keychain, item `attentionfarm-mod`, with your masked email as its comment. never in plain files, never in claude code settings. logging out deletes it.
-- **on attentionfarm:** your email, whether you asked for launch emails (off unless you tick the box), a scrambled copy of each session key with its last-used day, and daily totals with no names attached. sessions end after 90 days.
+- **on attentionfarm:** your email, a scrambled copy of each session key with its last-used day, and daily totals with no names attached. sessions end after 90 days.
 - **never:** your prompts, code, files, paths, ip address or device name. the mod hooks no prompt or tool events.
 
-delete account removes your account, sessions and waitlist email immediately. see [attentionfarm.com/privacy](https://attentionfarm.com/privacy).
+delete account removes your account and sessions immediately, along with any waitlist email you gave us before launch. see [attentionfarm.com/privacy](https://attentionfarm.com/privacy).
 
 ## ticker controls
 

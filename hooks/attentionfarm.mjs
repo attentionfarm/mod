@@ -30,7 +30,7 @@ const PRIVACY_URL = 'https://attentionfarm.com/privacy';
 const FLASH_MS = 5000;
 // `site` is where the flow is drawn: a pane opened by a command, or the band itself after one of
 // its buttons is pressed (the band then holds the keyboard, so a pane could not take it).
-const INITIAL_PANE = { site: 'none', step: 'email', intent: 'signup', updates: false, busy: false, canResend: false };
+const INITIAL_PANE = { site: 'none', step: 'email', intent: 'signup', busy: false, canResend: false };
 
 const COPY = {
   unsupported: 'login works in claude code on macos for now.',
@@ -286,12 +286,11 @@ async function sendCode($, typed, { resend = false } = {}) {
     await setPane($, { error: COPY.invalidEmail, note: undefined });
     return;
   }
-  const { value: pane = INITIAL_PANE } = await $.state.get(PANE);
   const gen = flow.gen;
   flow.busy = true;
   await setPane($, { busy: true, error: undefined, note: undefined });
-  // One door: the server creates the account only when the email is new, and ignores the opt-in otherwise.
-  const body = { email, intent: 'signup', updates: pane.updates === true };
+  // One door: the server creates the account only when the email is new and logs in otherwise.
+  const body = { email, intent: 'signup' };
   const result = await request($, 'POST', '/auth/start', { body });
   if (gen !== flow.gen) return;
   flow.busy = false;
@@ -496,11 +495,6 @@ function renderFlow($, e, pane, account) {
     })));
     if (status) lines.push(status);
     lines.push(controls(Box, [
-      Button({
-        key: 'attentionfarm-updates', plain: true, dimColor: !pane.updates,
-        label: pane.updates ? "✓ we'll email you when earning opens" : '+ email me when earning opens',
-        onPress: () => setPane($, { updates: !pane.updates }),
-      }),
       Box({ flexGrow: 1 }),
       Button({ key: 'attentionfarm-privacy', plain: true, dimColor: true, label: 'privacy', onPress: () => openPrivacy($) }),
     ]));
@@ -531,7 +525,7 @@ function renderFlow($, e, pane, account) {
     lines.push(controls(Box, [Button({ key: 'attentionfarm-cancel', plain: true, label: 'cancel', onPress: () => setPane($, { step: 'account', error: undefined }) })]));
   } else {
     lines.push(head(account.masked || 'your account', account.status === 'offline' ? 'offline' : undefined));
-    lines.push(line(Text, "earning isn't live yet. nothing to collect.", { dimColor: true }));
+    lines.push(line(Text, 'watch an ad, get tokens for claude code.', { dimColor: true }));
     if (status) lines.push(status);
     lines.push(controls(Box, [
       Button({ key: 'attentionfarm-logout', plain: true, label: 'log out', onPress: () => logout($) }),
@@ -559,17 +553,17 @@ function renderBand($, e, account) {
     second = account.flash
       ? Box({ flexDirection: 'row', columnGap: 1, children: [
         line(Text, account.flash === 'new' ? "you're in." : 'welcome back.', { bold: true }),
-        line(Text, account.flash === 'new' ? 'your spot is held. nothing else to do.' : "you're still on the list.", { dimColor: true, wrap: 'truncate-end' }),
+        line(Text, account.flash === 'new' ? 'your account is ready.' : 'good to see you again.', { dimColor: true, wrap: 'truncate-end' }),
       ] })
-      : line(Text, "you're on the list. this band will say when earning opens.", { dimColor: true, wrap: 'truncate-end' });
+      : line(Text, 'watch an ad, get tokens for claude code.', { dimColor: true, wrap: 'truncate-end' });
   } else {
     if (canLogin && account.status === 'out') {
       top.push(Button({ key: 'attentionfarm-signup', variant: 'secondary', label: 'sign up or log in', onPress: () => openFlow($, 'signup', 'band') }));
     }
-    // Where login cannot happen, the band only tells the truth; it never asks for a sign-up it can't take.
-    second = !canLogin ? line(Text, "earning isn't live yet.", { dimColor: true, wrap: 'truncate-end' }) : Box({ flexDirection: 'row', columnGap: 1, children: [
-      line(Text, 'be first in line', { bold: true }),
-      line(Text, "earning isn't live yet. sign up to hold your spot.", { dimColor: true, wrap: 'truncate-end' }),
+    // Where login cannot happen, the band never asks for a sign-up it can't take.
+    second = !canLogin ? line(Text, 'watch an ad, get tokens for claude code.', { dimColor: true, wrap: 'truncate-end' }) : Box({ flexDirection: 'row', columnGap: 1, children: [
+      line(Text, 'watch an ad, get tokens', { bold: true }),
+      line(Text, 'for claude code. one email code, no password.', { dimColor: true, wrap: 'truncate-end' }),
     ] });
   }
   return frame(Box, [Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: top }), second], e.surface);

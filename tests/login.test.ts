@@ -11,7 +11,7 @@ const SURFACES = ['terminal', 'desktop'] as const;
 const BAND = { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {} } as const;
 const PANE_PROPS = { title: 'attentionfarm', isFocused: true, bodyColumns: 80, placement: 'inline', scroll: { offset: 0, bodyRows: 8 }, view: {} } as const;
 const ALLOWED_KEYS: Record<string, string[]> = {
-  '/auth/start': ['email', 'intent', 'updates'],
+  '/auth/start': ['email', 'intent'],
   '/auth/verify': ['challenge_id', 'code'],
   '/auth/logout': ['all'],
   '/account': ['confirm'],
@@ -104,8 +104,9 @@ for (const surface of SURFACES) {
     expect(await drawn.find({ type: 'Text', text: 'native content' })).toBeDefined();
     expect((await drawn.find({ type: 'Button', key: 'attentionfarm-signup', text: 'sign up or log in' }))?.props.variant).toBe('secondary');
     expect(await drawn.find({ type: 'Button', key: 'attentionfarm-login' })).toBeUndefined();
-    expect(await drawn.find({ type: 'Text', text: "earning isn't live yet. sign up to hold your spot." })).toBeDefined();
-    expect(JSON.stringify(await drawn.drawn())).not.toMatch(/soon|powered by/);
+    expect((await drawn.find({ type: 'Text', text: 'watch an ad, get tokens' }))?.props.bold).toBe(true);
+    expect(await drawn.find({ type: 'Text', text: 'for claude code. one email code, no password.' })).toBeDefined();
+    expect(JSON.stringify(await drawn.drawn())).not.toMatch(/soon|powered by|waitlist|on the list|spot|isn't live/);
     await drawn.unmount();
     const survey = await $.ui.mount({ plugin: 'attentionfarm', surface, component: 'AbovePrompt', requestId: `survey-${surface}`, props: { ...BAND, hasSurvey: true } });
     expect(await survey.find({ type: 'Button', key: 'attentionfarm-signup' })).toBeUndefined();
@@ -127,11 +128,10 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(await view.find({ type: 'Button', key: 'attentionfarm-close', text: 'close' })).toBeDefined();
   expect(await view.find({ type: 'Button', key: 'attentionfarm-signup' })).toBeUndefined();
   expect((await view.find({ type: 'Input', key: 'attentionfarm-email' }))?.props).toMatchObject({ autoFocus: true, submitLabel: 'send code', placeholder: 'you@example.com' });
-  expect(await view.find({ type: 'Button', text: '+ email me when earning opens' })).toBeDefined();
-  await view.press({ key: 'attentionfarm-updates' });
-  expect(await view.find({ type: 'Button', text: "✓ we'll email you when earning opens" })).toBeDefined();
+  // No waitlist: nothing to opt in to on the way in.
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-updates' })).toBeUndefined();
   await view.input({ key: 'attentionfarm-email', text: '  You@Example.com ' });
-  expect(sent[0]).toMatchObject({ path: '/auth/start', method: 'POST', body: { email: EMAIL, intent: 'signup', updates: true } });
+  expect(sent[0]).toMatchObject({ path: '/auth/start', method: 'POST', body: { email: EMAIL, intent: 'signup' } });
   expect(await view.find({ type: 'Text', text: 'check your email' })).toBeDefined();
   expect(await view.find({ type: 'Text', text: `sent to ${MASKED}` })).toBeDefined();
   expect((await view.find({ type: 'Input', key: 'attentionfarm-code' }))?.props.autoFocus).toBe(true);
@@ -152,10 +152,10 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(toasts).toEqual([]);
   expect(await view.find({ type: 'Text', text: 'check your email' })).toBeUndefined();
   expect(await view.find({ type: 'Text', text: "you're in." })).toBeDefined();
-  expect(await view.find({ type: 'Text', text: 'your spot is held. nothing else to do.' })).toBeDefined();
+  expect(await view.find({ type: 'Text', text: 'your account is ready.' })).toBeDefined();
   await clock.advance(5_000);
   expect(await view.find({ type: 'Text', text: "you're in." })).toBeUndefined();
-  expect(await view.find({ type: 'Text', text: "you're on the list. this band will say when earning opens." })).toBeDefined();
+  expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
   for (const request of sent) {
     expect(request.headers['x-attentionfarm-mod']).toBe('0.2.1');
     expect(Object.keys(request.body ?? {}).every(key => ALLOWED_KEYS[request.path].includes(key))).toBe(true);
@@ -168,23 +168,23 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   stateHasNoSecrets([written, toasts, await after.drawn()]);
 });
 
-test('log in: the same flow for an existing account, opt-in absent, welcome back', async ($, on) => {
+test('log in: the same flow for an existing account, welcome back', async ($, on) => {
   const { clock, sent, toasts, opened, closed } = world(on, { replies: { '/auth/verify': { status: 200, body: { token: TOKEN, account: { email: EMAIL, created: false } } } } });
   await start($, clock);
   const result = await $.command.run({ command: 'attentionfarm', args: 'login' });
   expect(result).toMatchObject({ text: 'opened.' });
   expect(opened).toEqual(['attentionfarm-account']);
   const view = await pane($);
-  // One door: log in is the same step, and the opt-in stays off unless pressed.
+  // One door: log in is the same step.
   expect(await view.find({ type: 'Text', text: 'sign up or log in' })).toBeDefined();
   await view.input({ key: 'attentionfarm-email', text: EMAIL });
-  expect(sent[0].body).toEqual({ email: EMAIL, intent: 'signup', updates: false });
+  expect(sent[0].body).toEqual({ email: EMAIL, intent: 'signup' });
   await view.input({ key: 'attentionfarm-code', text: CODE });
   expect(toasts).toEqual([]);
   expect(closed).toEqual(['attentionfarm-account']);
   const after = await band($, 'terminal', 'back');
   expect(await after.find({ type: 'Text', text: 'welcome back.' })).toBeDefined();
-  expect(await after.find({ type: 'Text', text: "you're still on the list." })).toBeDefined();
+  expect(await after.find({ type: 'Text', text: 'good to see you again.' })).toBeDefined();
 });
 
 test('every error is one line, and what was typed stays', async ($, on) => {
@@ -250,7 +250,7 @@ test('resend sends the same email again and says so', async ($, on) => {
   await view.input({ key: 'attentionfarm-email', text: EMAIL });
   await clock.advance(60_000);
   await view.press({ key: 'attentionfarm-resend' });
-  expect(sent.map(request => request.body)).toEqual([{ email: EMAIL, intent: 'signup', updates: false }, { email: EMAIL, intent: 'signup', updates: false }]);
+  expect(sent.map(request => request.body)).toEqual([{ email: EMAIL, intent: 'signup' }, { email: EMAIL, intent: 'signup' }]);
   expect(await view.find({ type: 'Text', text: 'sent a new code.' })).toBeDefined();
   expect(await view.find({ type: 'Button', key: 'attentionfarm-resend' })).toBeUndefined();
 });
@@ -283,7 +283,7 @@ test('account pane: log out, log out everywhere, and delete', async ($, on) => {
   const view = await band($, 'terminal');
   await view.press({ key: 'attentionfarm-account' });
   expect((await view.find({ type: 'Text', text: MASKED }))?.props.bold).toBe(true);
-  expect(await view.find({ type: 'Text', text: "earning isn't live yet. nothing to collect." })).toBeDefined();
+  expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
   await view.press({ key: 'attentionfarm-delete-account' });
   await view.input({ key: 'attentionfarm-delete', text: 'yes' });
   expect(await view.find({ type: 'Text', text: 'delete your account?' })).toBeDefined();
@@ -348,7 +348,7 @@ test('a terminal without the security tool shows the label only', async ($, on) 
   const drawn = await band($, 'terminal', 'bare');
   expect(await drawn.find({ type: 'Button', key: 'attentionfarm-signup' })).toBeUndefined();
   // Where login cannot happen, the band never asks for a sign-up it can't take.
-  expect(await drawn.find({ type: 'Text', text: "earning isn't live yet." })).toBeDefined();
+  expect(await drawn.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
   expect(await $.command.run({ command: 'attentionfarm', args: 'signup' })).toMatchObject({ text: 'login works in claude code on macos for now.' });
 });
 

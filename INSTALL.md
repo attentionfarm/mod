@@ -30,7 +30,7 @@ exit and restart with `claude` after updating.
 
 ## what to expect
 
-a two-line band appears above the prompt: the **attentionfarm** wordmark and **sign up or log in**, then "earning isn't live yet. sign up to hold your spot." one email code signs you up or logs you in; there is no password. the cli ticker repeats **watch ad, get tokens | attentionfarm |**. ads and token earning aren't live yet.
+a two-line band appears above the prompt: the **attentionfarm** wordmark and **sign up or log in**, then "watch an ad, get tokens for claude code." one email code signs you up or logs you in; there is no password. the cli ticker repeats **watch ad, get tokens | attentionfarm |**.
 
 ## log in or sign up
 

@@ -10,7 +10,6 @@ declare module 'claude-code' {
         site: 'none' | 'pane' | 'band';
         step: 'email' | 'code' | 'account' | 'delete';
         intent: 'login' | 'signup';
-        updates: boolean;
         busy: boolean;
         canResend: boolean;
         sentTo?: string;
