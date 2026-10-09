@@ -448,9 +448,12 @@ function wordmark(Text) {
   return Text({ bold: true, backgroundColor: TIDE, color: TIDE_INK, children: [' attentionfarm '] });
 }
 
-// Every attentionfarm band wears the same tide outline, so it is always recognisably ours.
-function frame(Box, children) {
-  return Box({ flexDirection: 'column', borderStyle: 'round', borderColor: TIDE, paddingX: 1, children });
+// The terminal band has no chrome of its own, so it wears a tide outline. The desktop app already
+// draws a padded card around the band; a second frame inside it only adds dead space.
+function frame(Box, children, surface) {
+  return surface === 'terminal'
+    ? Box({ flexDirection: 'column', borderStyle: 'round', borderColor: TIDE, paddingX: 1, children })
+    : Box({ flexDirection: 'column', children });
 }
 
 function openPrivacy($) {
@@ -559,7 +562,7 @@ function renderBand($, e, account) {
       line(Text, "earning isn't live yet. sign up to hold your spot.", { dimColor: true, wrap: 'truncate-end' }),
     ] });
   }
-  return frame(Box, [Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: top }), second]);
+  return frame(Box, [Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: top }), second], e.surface);
 }
 
 const USAGE = 'use /attentionfarm signup, login, account or logout, or /attentionfarm ticker on, off, pause or resume.';
@@ -625,7 +628,7 @@ export function register(on) {
       if (account.status === 'unknown') ensureRestore($);
       const { value: pane = INITIAL_PANE } = await $.state.get(PANE);
       if (pane.site === 'band') {
-        return Box({ flexDirection: 'column', children: [native, frame(Box, [renderFlow($, e, pane, account)])] });
+        return Box({ flexDirection: 'column', children: [native, frame(Box, [renderFlow($, e, pane, account)], e.surface)] });
       }
     }
     return Box({ flexDirection: 'column', children: [native, renderBand($, e, account)] });
