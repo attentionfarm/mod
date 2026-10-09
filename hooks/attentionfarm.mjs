@@ -512,6 +512,8 @@ export function register(on) {
     await $.command.register({ name: 'attentionfarm', description: 'sign up, log in, your account, and the scrolling status line ticker.' });
     interactive = e.isInteractive;
     await syncTicker($);
+    // $.state outlives a reload; start every load from unknown so a stale answer is never trusted.
+    await $.state.set(ACCOUNT, INITIAL_ACCOUNT);
     if (e.isInteractive && LOGIN_SURFACES.has(e.surface)) ensureRestore($);
     return result;
   });
