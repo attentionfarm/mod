@@ -566,7 +566,9 @@ async function askFreeModel($, e) {
     // A key that ended (a new one elsewhere, a logout) is replaced once.
     if (response.status === 401 && attempt === 0) { backupKey = undefined; continue; }
     if (response.status === 429 && /used up/.test(data?.error?.message || '')) return { note: COPY.backupUsedUp };
-    if (response.status !== 200) return { note: response.status === 400 ? COPY.backupRejected : COPY.backupBusy };
+    if (response.status !== 200) {
+      return { note: response.status === 400 ? COPY.backupRejected : response.status === 503 ? COPY.backupUnavailable : COPY.backupBusy };
+    }
     // Which free model of attentionfarm's roster answered.
     const label = String(response.headers?.['x-attentionfarm-model-label'] || '').toLowerCase().slice(0, 40) || undefined;
     return { data, label };
