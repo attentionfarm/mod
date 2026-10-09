@@ -60,15 +60,17 @@ if (command === 'configure') {
   console.log(`this clone now commits as ${name} <${email}>`);
 } else if (command === 'push') {
   const { email } = await identity();
+  // Earlier history was published by github-actions[bot]; both bots are fine.
+  const allowed = new Set([email, '41898282+github-actions[bot]@users.noreply.github.com']);
   // An empty repository has no main yet; then every commit is outgoing.
   const remoteMain = git('ls-remote', `https://github.com/${repo}.git`, 'refs/heads/main') ? 'origin/main' : null;
   if (remoteMain) git('fetch', '--quiet', 'origin', 'main');
   // Refuse to publish any commit that would carry another identity.
   const range = remoteMain ? `${remoteMain}..HEAD` : 'HEAD';
   const outgoing = git('log', '--format=%H %ae %ce', range).split('\n').filter(Boolean);
-  const foreign = outgoing.filter((line) => line.split(' ').slice(1).some((e) => e !== email));
+  const foreign = outgoing.filter((line) => line.split(' ').slice(1).some((e) => !allowed.has(e)));
   if (foreign.length) {
-    console.error(`refusing to push commits not authored and committed as ${email}:\n${foreign.join('\n')}`);
+    console.error(`refusing to push commits not authored and committed by a bot:\n${foreign.join('\n')}`);
     process.exit(1);
   }
   if (!outgoing.length) {
