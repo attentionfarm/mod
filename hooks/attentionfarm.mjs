@@ -22,6 +22,12 @@ const TOKEN_PATTERN = /^afm_[A-Za-z0-9_-]{43}$/;
 const MASKED_PATTERN = /^[a-z0-9]?•••@[a-z0-9.-]+$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const INITIAL_ACCOUNT = { status: 'unknown' };
+// The palette: monochrome plus one signal, tide. Raw hex does not follow the host theme, so tide only
+// ever appears as a border or as a chip with its own ink, which reads on light and dark alike.
+const TIDE = '#2EC4B6';
+const TIDE_INK = '#03211F';
+const PRIVACY_URL = 'https://attentionfarm.com/privacy';
+const FLASH_MS = 5000;
 // `site` is where the flow is drawn: a pane opened by a command, or the band itself after one of
 // its buttons is pressed (the band then holds the keyboard, so a pane could not take it).
 const INITIAL_PANE = { site: 'none', step: 'email', intent: 'signup', updates: false, busy: false, canResend: false };
@@ -254,7 +260,7 @@ async function openFlow($, intent, site = 'pane') {
     await setPane($, { step: 'code', busy: false });
   } else {
     resetFlow();
-    await $.state.set(PANE, { ...INITIAL_PANE, intent });
+    await $.state.set(PANE, { ...INITIAL_PANE });
   }
   await show($, site);
   return true;
@@ -284,7 +290,8 @@ async function sendCode($, typed, { resend = false } = {}) {
   const gen = flow.gen;
   flow.busy = true;
   await setPane($, { busy: true, error: undefined, note: undefined });
-  const body = pane.intent === 'signup' ? { email, intent: 'signup', updates: pane.updates === true } : { email, intent: 'login' };
+  // One door: the server creates the account only when the email is new, and ignores the opt-in otherwise.
+  const body = { email, intent: 'signup', updates: pane.updates === true };
   const result = await request($, 'POST', '/auth/start', { body });
   if (gen !== flow.gen) return;
   flow.busy = false;
@@ -342,16 +349,17 @@ async function verifyCode($, typed) {
     await setPane($, { busy: false, error: COPY.keychain });
     return;
   }
-  const { value: pane = INITIAL_PANE } = await $.state.get(PANE);
   const created = result.data.account.created === true;
   resetFlow();
   flow.typedEmail = '';
-  await $.state.set(ACCOUNT, { status: 'in', masked });
+  await $.state.set(ACCOUNT, { status: 'in', masked, flash: created ? 'new' : 'back' });
   await $.state.set(PANE, { ...INITIAL_PANE });
   await $.ui.close({ id: PANE_ID }).catch(() => {});
-  $.ui.toast(!created ? `welcome back, ${masked}.`
-    : pane.updates ? `you're in, ${masked}. we'll email you when earning opens.`
-    : `you're in, ${masked}. earning is coming soon.`);
+  // The band says "you're in." for a few seconds, then settles; no toast to miss.
+  $.clock.after(FLASH_MS, async () => {
+    const { value: account = INITIAL_ACCOUNT } = await $.state.get(ACCOUNT);
+    if (account.flash) await $.state.set(ACCOUNT, { status: account.status, masked: account.masked });
+  });
 }
 
 async function signedOut($, toast) {
@@ -436,40 +444,58 @@ function line(Text, value, props = {}) {
   return Text({ ...props, children: [value] });
 }
 
+function wordmark(Text) {
+  return Text({ bold: true, backgroundColor: TIDE, color: TIDE_INK, children: [' attentionfarm '] });
+}
+
+// Every attentionfarm band wears the same tide outline, so it is always recognisably ours.
+function frame(Box, children) {
+  return Box({ flexDirection: 'column', borderStyle: 'round', borderColor: TIDE, paddingX: 1, children });
+}
+
+function openPrivacy($) {
+  return $.process.run(['open', PRIVACY_URL]).then(result => {
+    if (result.exitCode !== 0) throw new Error('open-failed');
+  }).catch(() => $.ui.toast('could not open attentionfarm.com/privacy in your browser.'));
+}
+
+function heading(Box, Text, Button, $, title, detail, { close = true, detailWrap = 'truncate-end' } = {}) {
+  const parts = [line(Text, title, { bold: true })];
+  if (detail) parts.push(line(Text, detail, { dimColor: true, wrap: detailWrap }));
+  parts.push(Box({ flexGrow: 1 }));
+  if (close) parts.push(Button({ key: 'attentionfarm-close', role: 'dismiss', label: 'close', onPress: () => closeFlow($) }));
+  return Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: parts });
+}
+
 function renderFlow($, e, pane, account) {
   const { Box, Text, Button, Input } = $.ui.resolve(e);
+  const head = (title, detail, options) => heading(Box, Text, Button, $, title, detail, options);
   const lines = [];
-  // In the band there is no pane frame to close, so the heading carries its own close.
-  const heading = value => e.component !== 'AbovePrompt' ? line(Text, value, { bold: true }) : Box({ flexDirection: 'row', gap: 3, children: [
-    line(Text, value, { bold: true }),
-    Button({ key: 'attentionfarm-close', plain: true, dimColor: true, label: 'close', onPress: () => closeFlow($) }),
-  ] });
-  const status = pane.busy ? line(Text, pane.step === 'code' ? 'checking...' : pane.step === 'email' ? 'sending your code...' : 'one moment...', { dimColor: true })
-    : pane.error ? line(Text, pane.error)
+  const status = pane.busy ? line(Text, pane.step === 'code' ? 'checking…' : pane.step === 'email' ? 'sending your code…' : 'one moment…', { dimColor: true })
+    : pane.error ? line(Text, pane.error, { bold: true })
     : pane.note ? line(Text, pane.note, { dimColor: true })
     : undefined;
   if (pane.step === 'email') {
-    const signup = pane.intent === 'signup';
-    lines.push(heading(signup ? 'sign up for attentionfarm' : 'log in to attentionfarm'));
-    lines.push(line(Text, "we'll email you a 6-digit code. no password.", { dimColor: true }));
+    lines.push(head('sign up or log in', 'one code by email. no password.'));
     lines.push(Input({
-      key: 'attentionfarm-email', label: 'email', placeholder: 'you@example.com', value: flow.typedEmail, submitLabel: 'send code', autoFocus: true,
+      key: 'attentionfarm-email', placeholder: 'you@example.com', value: flow.typedEmail, submitLabel: 'send code', autoFocus: true,
       onInput: value => { flow.typedEmail = value; },
       onSubmit: value => sendCode($, value),
     }));
     if (status) lines.push(status);
-    if (signup) {
-      lines.push(Button({
-        key: 'attentionfarm-updates', plain: true, label: `${pane.updates ? '[x]' : '[ ]'} also email me when earning launches`,
+    lines.push(Box({ flexDirection: 'row', flexWrap: 'wrap', columnGap: 2, children: [
+      Button({
+        key: 'attentionfarm-updates', plain: true, dimColor: !pane.updates,
+        label: pane.updates ? "✓ we'll email you when earning opens" : '+ email me when earning opens',
         onPress: () => setPane($, { updates: !pane.updates }),
-      }));
-      lines.push(line(Text, "earning isn't live yet. your account will be ready when it is.", { dimColor: true }));
-    }
-    lines.push(line(Text, 'privacy: attentionfarm.com/privacy', { dimColor: true }));
+      }),
+      Box({ flexGrow: 1 }),
+      Button({ key: 'attentionfarm-privacy', plain: true, dimColor: true, label: 'privacy', onPress: () => openPrivacy($) }),
+    ] }));
   } else if (pane.step === 'code') {
-    lines.push(heading(`check ${pane.sentTo || 'your inbox'} for a 6-digit code`));
+    lines.push(head('check your email', `sent to ${pane.sentTo || 'your inbox'}`, { detailWrap: 'truncate-middle' }));
     lines.push(Input({
-      key: 'attentionfarm-code', label: 'code', placeholder: '6 digits', value: flow.typedCode, submitLabel: 'verify', autoFocus: true,
+      key: 'attentionfarm-code', placeholder: '6-digit code', value: flow.typedCode, submitLabel: 'verify', autoFocus: true,
       onInput: value => {
         flow.typedCode = value;
         const digits = value.replace(/[\s-]/g, '');
@@ -479,29 +505,61 @@ function renderFlow($, e, pane, account) {
     }));
     if (status) lines.push(status);
     if (flow.devCode) lines.push(line(Text, `local dev code: ${flow.devCode}`, { dimColor: true }));
-    lines.push(Box({ flexDirection: 'row', gap: 3, children: [
+    lines.push(Box({ flexDirection: 'row', flexWrap: 'wrap', columnGap: 2, children: [
       pane.canResend
         ? Button({ key: 'attentionfarm-resend', plain: true, label: 'resend code', onPress: () => sendCode($, '', { resend: true }) })
         : line(Text, 'resend in a minute', { dimColor: true }),
-      Button({ key: 'attentionfarm-change-email', plain: true, label: 'use a different email', onPress: () => useDifferentEmail($) }),
+      Button({ key: 'attentionfarm-change-email', plain: true, dimColor: true, label: 'wrong email?', onPress: () => useDifferentEmail($) }),
     ] }));
   } else if (pane.step === 'delete') {
-    lines.push(heading('type delete to remove your account and email from attentionfarm.'));
-    lines.push(Input({ key: 'attentionfarm-delete', submitLabel: 'delete', autoFocus: true, onSubmit: value => deleteAccount($, value) }));
+    lines.push(head('delete your account?'));
+    lines.push(line(Text, "this removes your email from attentionfarm. it can't be undone.", { dimColor: true }));
+    lines.push(Input({ key: 'attentionfarm-delete', placeholder: 'type delete', submitLabel: 'delete', autoFocus: true, onSubmit: value => deleteAccount($, value) }));
     if (status) lines.push(status);
     lines.push(Button({ key: 'attentionfarm-cancel', plain: true, label: 'cancel', onPress: () => setPane($, { step: 'account', error: undefined }) }));
   } else {
-    lines.push(heading('attentionfarm account'));
-    lines.push(line(Text, `logged in as ${account.masked || 'your account'}${account.status === 'offline' ? ' (offline)' : ''}`));
-    lines.push(line(Text, 'earning is coming soon. nothing to collect yet.', { dimColor: true }));
+    lines.push(head(account.masked || 'your account', account.status === 'offline' ? 'offline' : undefined));
+    lines.push(line(Text, "earning isn't live yet. nothing to collect.", { dimColor: true }));
     if (status) lines.push(status);
-    lines.push(Box({ flexDirection: 'row', gap: 3, children: [
+    lines.push(Box({ flexDirection: 'row', flexWrap: 'wrap', columnGap: 2, children: [
       Button({ key: 'attentionfarm-logout', plain: true, label: 'log out', onPress: () => logout($) }),
-      Button({ key: 'attentionfarm-logout-all', plain: true, label: 'log out everywhere', onPress: () => logout($, { all: true }) }),
+      Button({ key: 'attentionfarm-logout-all', plain: true, dimColor: true, label: 'log out everywhere', onPress: () => logout($, { all: true }) }),
+      Box({ flexGrow: 1 }),
       Button({ key: 'attentionfarm-delete-account', plain: true, dimColor: true, label: 'delete account', onPress: async () => { await setPane($, { step: 'delete', error: undefined }); await focus($, 'attentionfarm-delete'); } }),
     ] }));
   }
   return Box({ flexDirection: 'column', children: lines });
+}
+
+// The resting band: two lines, the wordmark and one action, then the honest line.
+function renderBand($, e, account) {
+  const { Box, Text, Button } = $.ui.resolve(e);
+  const canLogin = LOGIN_SURFACES.has(e.surface) && account.status !== 'unsupported';
+  const top = [wordmark(Text), Box({ flexGrow: 1 })];
+  let second;
+  if (account.status === 'in' || account.status === 'offline') {
+    top.push(Button({
+      key: 'attentionfarm-account', plain: true, dimColor: true,
+      label: `${account.masked || 'your account'}${account.status === 'offline' ? ' · offline' : ''}`,
+      onPress: () => openAccount($, 'band'),
+    }));
+    second = account.flash
+      ? Box({ flexDirection: 'row', columnGap: 1, children: [
+        line(Text, account.flash === 'new' ? "you're in." : 'welcome back.', { bold: true }),
+        line(Text, account.flash === 'new' ? 'your spot is held. nothing else to do.' : "you're still on the list.", { dimColor: true, wrap: 'truncate-end' }),
+      ] })
+      : line(Text, "you're on the list. this band will say when earning opens.", { dimColor: true, wrap: 'truncate-end' });
+  } else {
+    if (canLogin && account.status === 'out') {
+      top.push(Button({ key: 'attentionfarm-signup', variant: 'secondary', label: 'sign up or log in', onPress: () => openFlow($, 'signup', 'band') }));
+    }
+    // Where login cannot happen, the band only tells the truth; it never asks for a sign-up it can't take.
+    second = !canLogin ? line(Text, "earning isn't live yet.", { dimColor: true, wrap: 'truncate-end' }) : Box({ flexDirection: 'row', columnGap: 1, children: [
+      line(Text, 'be first in line', { bold: true }),
+      line(Text, "earning isn't live yet. sign up to hold your spot.", { dimColor: true, wrap: 'truncate-end' }),
+    ] });
+  }
+  return frame(Box, [Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: top }), second]);
 }
 
 const USAGE = 'use /attentionfarm signup, login, account or logout, or /attentionfarm ticker on, off, pause or resume.';
@@ -560,46 +618,16 @@ export function register(on) {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const native = await next(e);
     if (e.props.hasSurvey) return native;
-    const { Box, Button } = $.ui.resolve(e);
+    const { Box } = $.ui.resolve(e);
+    const { value: account = INITIAL_ACCOUNT } = await $.state.get(ACCOUNT);
     if (LOGIN_SURFACES.has(e.surface)) {
       bandRequestId = e.requestId;
+      if (account.status === 'unknown') ensureRestore($);
       const { value: pane = INITIAL_PANE } = await $.state.get(PANE);
       if (pane.site === 'band') {
-        const { value: account = INITIAL_ACCOUNT } = await $.state.get(ACCOUNT);
-        return Box({ flexDirection: 'column', children: [native, renderFlow($, e, pane, account)] });
+        return Box({ flexDirection: 'column', children: [native, frame(Box, [renderFlow($, e, pane, account)])] });
       }
     }
-    const label = Button({
-      key: 'attentionfarm-website',
-      plain: true,
-      label: 'powered by attentionfarm',
-      onPress: async () => {
-        try {
-          const result = await $.process.run(['open', 'https://attentionfarm.com/?utm_source=mod&utm_campaign=mod-waitlist-v0']);
-          if (result.exitCode !== 0) throw new Error('open-failed');
-        } catch {
-          $.ui.toast('could not open attentionfarm in your browser.');
-        }
-      },
-    });
-    const controls = [label];
-    if (LOGIN_SURFACES.has(e.surface)) {
-      const { value: account = INITIAL_ACCOUNT } = await $.state.get(ACCOUNT);
-      if (account.status === 'unknown') ensureRestore($);
-      if (account.status === 'out') {
-        controls.push(Button({ key: 'attentionfarm-login', plain: true, label: 'log in', onPress: () => openFlow($, 'login', 'band') }));
-        controls.push(Button({ key: 'attentionfarm-signup', plain: true, label: 'sign up', onPress: () => openFlow($, 'signup', 'band') }));
-      } else if (account.status === 'in' || account.status === 'offline') {
-        controls.push(Button({
-          key: 'attentionfarm-account', plain: true, dimColor: true,
-          label: `${account.masked || 'your account'}${account.status === 'offline' ? ' (offline)' : ''}`,
-          onPress: () => openAccount($, 'band'),
-        }));
-      }
-    }
-    return Box({
-      flexDirection: 'column',
-      children: [native, controls.length === 1 ? label : Box({ flexDirection: 'row', gap: 3, children: controls })],
-    });
+    return Box({ flexDirection: 'column', children: [native, renderBand($, e, account)] });
   });
 }

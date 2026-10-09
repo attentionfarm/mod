@@ -7,7 +7,7 @@
     {
       "name": "attentionfarm",
       "source": "./",
-      "description": "log in or sign up with a 6-digit email code, a clickable powered by attentionfarm label, and a scrolling status line. earning is coming soon.",
+      "description": "sign up or log in with a 6-digit email code, an attentionfarm band above the prompt, and a scrolling status line. earning isn't live yet.",
       "version": "0.2.1"
     }
   ],

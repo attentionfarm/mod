@@ -2,11 +2,11 @@
 
 **log in** or **sign up** for attentionfarm without leaving claude code: type your email, then the 6-digit code we send you. no password, no browser.
 
-above your prompt: **powered by attentionfarm   log in   sign up**. once you're in, it shows your masked email (`n•••@gmail.com`); click it for your account.
+above your prompt, a two-line band with a tide outline: the **attentionfarm** wordmark and **sign up or log in**, then "earning isn't live yet. sign up to hold your spot." once you're in, it shows your masked email (`n•••@gmail.com`); click it for your account.
 
 the cli status line scrolls: **watch ad, get tokens | attentionfarm |**.
 
-ads and token earning are coming soon. an account today only means you're ready when earning opens.
+ads and token earning aren't live yet. an account today only holds your spot for when earning opens.
 
 ## install
 

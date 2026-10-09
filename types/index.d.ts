@@ -4,7 +4,8 @@ declare module 'claude-code' {
       ticker: { enabled: boolean; paused: boolean };
       tickerOffset: number;
       // No email, code, token or challenge id: only a masked address such as n•••@gmail.com.
-      account: { status: 'unknown' | 'out' | 'in' | 'offline' | 'unsupported'; masked?: string };
+      // flash: the few seconds after a login when the band says "you're in." / "welcome back."
+      account: { status: 'unknown' | 'out' | 'in' | 'offline' | 'unsupported'; masked?: string; flash?: 'new' | 'back' };
       pane: {
         site: 'none' | 'pane' | 'band';
         step: 'email' | 'code' | 'account' | 'delete';
