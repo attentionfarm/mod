@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package the six allowlisted mod files as a deterministic local-import ZIP."""
+"""Package the seven allowlisted mod files as a deterministic local-import ZIP."""
 import argparse
 import hashlib
 import json
@@ -11,7 +11,7 @@ root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output-dir', type=Path, default=root / 'dist')
 args = parser.parse_args()
-paths = ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/attentionfarm.mjs', 'types/index.d.ts', 'README.md', 'INSTALL.md']
+paths = ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/attentionfarm.mjs', 'hooks/tool-schemas.mjs', 'types/index.d.ts', 'README.md', 'INSTALL.md']
 manifest = json.loads((root / paths[0]).read_text())
 if manifest['name'] != 'attentionfarm' or manifest['version'] != '0.3.0':
     raise SystemExit('Unexpected candidate identity/version')

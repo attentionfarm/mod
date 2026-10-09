@@ -3,7 +3,7 @@ declare module 'claude-code' {
     attentionfarm: {
       ticker: { enabled: boolean; paused: boolean };
       tickerOffset: number;
-      // No email, code, token or challenge id: only a masked address such as n•••@gmail.com.
+      // No email, code, token or challenge id: only a masked address such as y•••@example.com.
       // flash: the few seconds after a login when the band says "you're in." / "welcome back."
       account: { status: 'unknown' | 'out' | 'in' | 'offline' | 'unsupported'; masked?: string; flash?: 'new' | 'back' };
       // Free backup in this session. No key: only what the band shows.
