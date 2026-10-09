@@ -9,6 +9,8 @@ declare module 'claude-code' {
       // Free backup in this process. No key: only what the band shows, and whether the switch set
       // CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS so switching back unsets only its own.
       backup: { status: 'off' | 'offer' | 'switching' | 'on'; label?: string; remaining?: number; note?: string; ownsBetas?: boolean };
+      // Free tokens this Claude Code session used through attentionfarm, from each request's usage.
+      backupTokens: { input: number; output: number; cacheRead: number; cacheCreation: number; steps: number };
       pane: {
         site: 'none' | 'pane' | 'band';
         step: 'email' | 'code' | 'account' | 'delete';

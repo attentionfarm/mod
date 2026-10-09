@@ -1,8 +1,14 @@
+import { update } from 'claude-code';
+
 const TICKER_STATE = { plugin: 'attentionfarm', key: 'ticker' };
 const TICKER_OFFSET = { plugin: 'attentionfarm', key: 'tickerOffset' };
 const ACCOUNT = { plugin: 'attentionfarm', key: 'account' };
 const PANE = { plugin: 'attentionfarm', key: 'pane' };
 const BACKUP = { plugin: 'attentionfarm', key: 'backup' };
+// Free tokens this Claude Code session used through attentionfarm, counted here from each model
+// request's own usage. Its own key, so switching back to claude keeps it.
+const TOKENS = { plugin: 'attentionfarm', key: 'backupTokens' };
+const NO_TOKENS = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, steps: 0 };
 const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
@@ -449,6 +455,27 @@ async function backupBlocked($) {
   return undefined;
 }
 
+function tokenTotal(tokens = NO_TOKENS) {
+  return tokens.input + tokens.output + tokens.cacheRead + tokens.cacheCreation;
+}
+
+function formatTokens(count) {
+  if (count < 1000) return String(count);
+  const [scaled, unit] = count < 1_000_000 ? [count / 1000, 'k'] : [count / 1_000_000, 'm'];
+  return `${scaled < 10 ? scaled.toFixed(1).replace(/\.0$/, '') : Math.round(scaled)}${unit}`;
+}
+
+function addUsage(tokens = NO_TOKENS, usage) {
+  const count = value => (Number.isFinite(value) && value > 0 ? Math.floor(value) : 0);
+  return {
+    input: tokens.input + count(usage.input_tokens),
+    output: tokens.output + count(usage.output_tokens),
+    cacheRead: tokens.cacheRead + count(usage.cache_read_input_tokens),
+    cacheCreation: tokens.cacheCreation + count(usage.cache_creation_input_tokens),
+    steps: tokens.steps + 1,
+  };
+}
+
 async function backupState($) {
   const { value = INITIAL_BACKUP } = await $.state.get(BACKUP);
   return value;
@@ -649,14 +676,15 @@ function renderFlow($, e, pane, account) {
 }
 
 // Free backup in the band: the offer after a limit stop, then which model is answering and the way back.
-function backupRows($, Box, Text, Button, account, backup) {
+function backupRows($, Box, Text, Button, account, backup, used) {
   if (backup.status === 'switching') return [line(Text, 'switching to free backup…', { dimColor: true })];
   if (backup.status === 'on') {
+    const spent = ` · ${formatTokens(used)} tokens this session`;
     const left = Number.isInteger(backup.remaining) ? ` · ${backup.remaining} requests left today` : '';
     return [
       Box({ flexDirection: 'row', alignItems: 'center', columnGap: 1, children: [
         line(Text, 'free backup', { bold: true }),
-        line(Text, `${backup.label || 'a free model'}${left}`, { dimColor: true, wrap: 'truncate-end' }),
+        line(Text, `${backup.label || 'a free model'}${spent}${left}`, { dimColor: true, wrap: 'truncate-end' }),
         Box({ flexGrow: 1 }),
         Button({ key: 'attentionfarm-backup-off', plain: true, label: 'back to claude', onPress: () => switchBack($) }),
       ] }),
@@ -681,7 +709,7 @@ function backupRows($, Box, Text, Button, account, backup) {
 }
 
 // The resting band: two lines, the wordmark and one action, then the honest line.
-function renderBand($, e, account, backup = INITIAL_BACKUP) {
+function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0) {
   const { Box, Text, Button } = $.ui.resolve(e);
   const canLogin = LOGIN_SURFACES.has(e.surface) && account.status !== 'unsupported';
   const top = [wordmark(Text), Box({ flexGrow: 1 })];
@@ -708,7 +736,15 @@ function renderBand($, e, account, backup = INITIAL_BACKUP) {
       line(Text, 'for claude code. one email code, no password.', { dimColor: true, wrap: 'truncate-end' }),
     ] });
   }
-  const rows = backupRows($, Box, Text, Button, account, backup) || [second];
+  // After backup, the session's free tokens stay in view at the end of the band's second line.
+  if (used > 0) {
+    second = Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: [
+      Box({ flexShrink: 1, children: [second] }),
+      Box({ flexGrow: 1 }),
+      line(Text, `${formatTokens(used)} free tokens this session`, { dimColor: true }),
+    ] });
+  }
+  const rows = backupRows($, Box, Text, Button, account, backup, used) || [second];
   return frame(Box, [Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: top }), ...rows], e.surface);
 }
 
@@ -729,7 +765,25 @@ export function register(on) {
 
   on('classic.SessionStart', async ($, e, next) => {
     const result = await next(e);
-    if (['clear', 'resume', 'fork'].includes(e.source)) await syncTicker($);
+    if (['clear', 'resume', 'fork'].includes(e.source)) {
+      await syncTicker($);
+      // A new session id: its free tokens start again, as /cost does.
+      await $.state.set(TOKENS, NO_TOKENS);
+    }
+    return result;
+  });
+
+  // Counts each model request answered while free backup was on when it started, main loop and
+  // subagents alike, from the usage the response itself reported. A step Claude answered (the switch
+  // did not take) is not free and is not counted. Chunks pass through untouched.
+  on('turn.step', async function* ($, e, next) {
+    let counting = false;
+    try { counting = (await backupState($)).status === 'on'; } catch {}
+    const result = yield* next(e);
+    const usage = result?.usage;
+    if (counting && usage && !/^claude-/i.test(usage.model || '')) {
+      try { await update($, TOKENS, tokens => addUsage(tokens, usage)); } catch {}
+    }
     return result;
   });
 
@@ -791,6 +845,8 @@ export function register(on) {
     const { Box } = $.ui.resolve(e);
     const { value: account = INITIAL_ACCOUNT } = await $.state.get(ACCOUNT);
     const backup = await backupState($);
+    const { value: tokens = NO_TOKENS } = await $.state.get(TOKENS);
+    const used = tokenTotal(tokens);
     if (LOGIN_SURFACES.has(e.surface)) {
       bandRequestId = e.requestId;
       if (account.status === 'unknown') ensureRestore($);
@@ -799,6 +855,6 @@ export function register(on) {
         return Box({ flexDirection: 'column', children: [native, frame(Box, [renderFlow($, e, pane, account)], e.surface)] });
       }
     }
-    return Box({ flexDirection: 'column', children: [native, renderBand($, e, account, backup)] });
+    return Box({ flexDirection: 'column', children: [native, renderBand($, e, account, backup, used)] });
   });
 }

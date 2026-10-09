@@ -56,6 +56,7 @@ when claude stops at a usage limit in a terminal session, the band offers **cont
 - it is never offered in the desktop app, a remote session, a cloud provider, or when you use your own api key, gateway or key helper, because there the switch could send your own credential to attentionfarm.
 - while it is on, your prompts and code go through attentionfarm to openrouter and the model's host. attentionfarm keeps none of them, but free models' hosts may keep and learn from what they receive.
 - each account gets a daily number of free requests. it resets at midnight utc.
+- the band counts the free tokens this session used, from each reply's own usage, on your machine. switching back keeps the count; `/clear` starts it again.
 
 ## ticker controls
 

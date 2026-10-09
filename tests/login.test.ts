@@ -33,6 +33,13 @@ function world(on: On, options: { keychain?: { token: string; comment: string };
   on('settings.read', () => ({ value: options.settings ?? {} }));
   on('prompt.submit', ($, e) => { submitted.push(e.text); return { text: e.text, context: [] } as any; });
   on('classic.StopFailure', () => ({}));
+  // The model beneath every step: answers with the usage the test queues (Nemotron by default).
+  const usages: any[] = [];
+  on('turn.step', async function* ($: any, e: any) {
+    const usage = usages.shift() ?? null;
+    yield { kind: 'text', index: 0, text: 'ok' };
+    return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage };
+  } as any);
   on('classic.Stop', () => ({}));
   const sent: Sent[] = [];
   const toasts: string[] = [];
@@ -89,7 +96,7 @@ function world(on: On, options: { keychain?: { token: string; comment: string };
     const hex = [...new TextEncoder().encode(keychain.comment)].map(b => b.toString(16).padStart(2, '0').toUpperCase()).join('');
     return { value: { exitCode: 0, stdout: `    "icmt"<blob>=0x${hex}  "escaped"\n`, stderr: '' } };
   });
-  return { clock, sent, toasts, opened, closed, focused, runs, written, env, submitted, keychain: () => keychain };
+  return { clock, sent, toasts, opened, closed, focused, runs, written, env, submitted, usages, keychain: () => keychain };
 }
 
 async function start($: any, clock: { advance: (ms: number) => Promise<void> }, surface: 'terminal' | 'desktop' = 'terminal') {
@@ -418,10 +425,10 @@ test('backup: a limit stop offers it, the switch points this process at attentio
   expect(env).toEqual({ ANTHROPIC_BASE_URL: `${API}/backup`, ANTHROPIC_AUTH_TOKEN: BACKUP_KEY, CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1' });
   expect(submitted).toEqual(['continue where you left off.']);
   expect(await view.find({ type: 'Text', text: 'free backup' })).toBeDefined();
-  expect(await view.find({ type: 'Text', text: 'nemotron 3 ultra · 100 requests left today' })).toBeDefined();
+  expect(await view.find({ type: 'Text', text: 'nemotron 3 ultra · 0 tokens this session · 100 requests left today' })).toBeDefined();
   // A finished turn refreshes the count.
   await $.classic.Stop({ stop_hook_active: false });
-  expect(await view.find({ type: 'Text', text: 'nemotron 3 ultra · 87 requests left today' })).toBeDefined();
+  expect(await view.find({ type: 'Text', text: 'nemotron 3 ultra · 0 tokens this session · 87 requests left today' })).toBeDefined();
   // A failure while on backup says so; the next finished turn clears it.
   await $.classic.StopFailure(LIMIT);
   expect(await view.find({ type: 'Text', text: "the free model is busy, or today's free backup is used up." })).toBeDefined();
@@ -502,4 +509,62 @@ test('backup: logged out, the offer asks for sign-up first; an unavailable servi
   expect(await view.find({ type: 'Text', text: "free backup isn't available right now." })).toBeDefined();
   expect(out.env).toEqual({});
   expect(out.submitted).toEqual([]);
+});
+
+const FREE = (input: number, output: number, extra: Record<string, unknown> = {}) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'nvidia/nemotron-3-ultra-550b-a55b:free', ...extra });
+
+async function step($: any, extra: Record<string, unknown> = {}) {
+  const stream = $.turn.step({ turnId: 'turn-1', index: 0, model: 'claude-opus-5-5', messageCount: 3, ...extra });
+  const chunks = [];
+  for (let read = await stream.next(); ; read = await stream.next()) {
+    if (read.done) return { chunks, result: read.value };
+    chunks.push(read.value);
+  }
+}
+
+test('backup tokens: counted locally per request while backup is on, kept after switching back, reset by /clear', async ($, on) => {
+  const { clock, usages } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
+  await start($, clock);
+  const view = await band($, 'terminal');
+  // Before backup: Claude's own steps are never counted.
+  usages.push(FREE(5000, 100, { model: 'claude-opus-5-5' }));
+  const plain = await step($);
+  expect(plain.chunks).toEqual([{ kind: 'text', index: 0, text: 'ok' }]);
+  expect(JSON.stringify(await view.drawn())).not.toMatch(/tokens this session/);
+  await $.classic.StopFailure(LIMIT);
+  await view.press({ key: 'attentionfarm-backup-on' });
+  expect(await view.find({ type: 'Text', text: 'nemotron 3 ultra · 0 tokens this session · 100 requests left today' })).toBeDefined();
+  // Main loop and a subagent, cache tokens included; a step Claude still answered is not free.
+  usages.push(FREE(1200, 300, { cache_read_input_tokens: 400 }), FREE(800, 200), FREE(9999, 1, { model: 'claude-opus-5-5' }));
+  await step($);
+  await step($, { agentId: 'agent-1' });
+  const passed = await step($);
+  expect(passed.result.usage.model).toBe('claude-opus-5-5');
+  expect(await view.find({ type: 'Text', text: 'nemotron 3 ultra · 2.9k tokens this session · 100 requests left today' })).toBeDefined();
+  // A step with no usage counts nothing.
+  await step($);
+  await view.press({ key: 'attentionfarm-backup-off' });
+  expect(await view.find({ type: 'Text', text: '2.9k free tokens this session' })).toBeDefined();
+  expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
+  // Back on claude: nothing more is added.
+  usages.push(FREE(70000, 10));
+  await step($);
+  expect(await view.find({ type: 'Text', text: '2.9k free tokens this session' })).toBeDefined();
+  await $.classic.SessionStart({ source: 'clear' });
+  expect(JSON.stringify(await view.drawn())).not.toMatch(/tokens this session/);
+});
+
+test('backup tokens: a step that started on backup counts even if the person switches back mid-answer', async ($, on) => {
+  const { clock, usages } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
+  await start($, clock);
+  await $.classic.StopFailure(LIMIT);
+  const view = await band($, 'terminal');
+  await view.press({ key: 'attentionfarm-backup-on' });
+  usages.push(FREE(1_234_000, 5_000));
+  const stream = $.turn.step({ turnId: 'turn-2', index: 0, model: 'claude-opus-5-5', messageCount: 3 });
+  const first = await stream.next();
+  expect(first.value).toEqual({ kind: 'text', index: 0, text: 'ok' });
+  await view.press({ key: 'attentionfarm-backup-off' });
+  while (!(await stream.next()).done) {}
+  expect(await view.find({ type: 'Text', text: '1.2m free tokens this session' })).toBeDefined();
 });
