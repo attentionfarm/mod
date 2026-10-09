@@ -5,7 +5,7 @@ test('the website link composes with native content on desktop and terminal and 
   const opened: string[][] = [];
   on('process.run', ($, e) => {
     opened.push([...e.argv]);
-    return { exitCode: 0, stdout: '', stderr: '' };
+    return { value: { exitCode: 0, stdout: '', stderr: '' } };
   });
   on('ui.render', ($, e) => {
     received.push(e.requestId);

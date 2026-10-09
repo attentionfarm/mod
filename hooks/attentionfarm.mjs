@@ -6,12 +6,14 @@ const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.2.0';
+const MOD_VERSION = '0.2.1';
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
 const DEV_SERVICE = 'attentionfarm-mod-dev';
 const SECURITY = '/usr/bin/security';
+// Surfaces that draw native inputs the person can type into: the terminal and claude code desktop.
+const LOGIN_SURFACES = new Set(['terminal', 'desktop']);
 const KEYCHAIN_ACCOUNT = 'session';
 const REQUEST_TIMEOUT_MS = 10000;
 const RESEND_AFTER_MS = 60000;
@@ -25,7 +27,7 @@ const INITIAL_ACCOUNT = { status: 'unknown' };
 const INITIAL_PANE = { site: 'none', step: 'email', intent: 'signup', updates: false, busy: false, canResend: false };
 
 const COPY = {
-  unsupported: 'login works in the claude code terminal on macos for now.',
+  unsupported: 'login works in claude code on macos for now.',
   network: "couldn't reach attentionfarm. check your connection and try again.",
   unavailable: "login isn't available right now.",
   invalidEmail: 'enter a valid email.',
@@ -500,7 +502,7 @@ export function register(on) {
     await $.command.register({ name: 'attentionfarm', description: 'sign up, log in, your account, and the scrolling status line ticker.' });
     interactive = e.isInteractive;
     await syncTicker($);
-    if (e.isInteractive && e.surface === 'terminal') {
+    if (e.isInteractive && LOGIN_SURFACES.has(e.surface)) {
       $.clock.after(0, () => restore($));
     } else {
       await $.state.set(ACCOUNT, { status: 'unsupported' });
@@ -551,7 +553,7 @@ export function register(on) {
     const native = await next(e);
     if (e.props.hasSurvey) return native;
     const { Box, Button } = $.ui.resolve(e);
-    if (e.surface === 'terminal') {
+    if (LOGIN_SURFACES.has(e.surface)) {
       bandRequestId = e.requestId;
       const { value: pane = INITIAL_PANE } = await $.state.get(PANE);
       if (pane.site === 'band') {
@@ -573,7 +575,7 @@ export function register(on) {
       },
     });
     const controls = [label];
-    if (e.surface === 'terminal') {
+    if (LOGIN_SURFACES.has(e.surface)) {
       const { value: account = INITIAL_ACCOUNT } = await $.state.get(ACCOUNT);
       if (account.status === 'out') {
         controls.push(Button({ key: 'attentionfarm-login', plain: true, label: 'log in', onPress: () => openFlow($, 'login', 'band') }));

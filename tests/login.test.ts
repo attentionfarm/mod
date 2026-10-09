@@ -96,14 +96,14 @@ function stateHasNoSecrets(values: unknown[]) {
 }
 
 for (const surface of SURFACES) {
-  test(`logged out on ${surface}: ${surface === 'terminal' ? 'three controls' : 'the label alone'}, and the band still yields to surveys`, async ($, on) => {
+  test(`logged out on ${surface}: three controls, and the band still yields to surveys`, async ($, on) => {
     const { clock } = world(on);
     await start($, clock, surface);
     const drawn = await band($, surface);
     expect(await drawn.find({ type: 'Button', text: 'powered by attentionfarm' })).toBeDefined();
     expect(await drawn.find({ type: 'Text', text: 'native content' })).toBeDefined();
-    expect(Boolean(await drawn.find({ type: 'Button', key: 'attentionfarm-login', text: 'log in' }))).toBe(surface === 'terminal');
-    expect(Boolean(await drawn.find({ type: 'Button', key: 'attentionfarm-signup', text: 'sign up' }))).toBe(surface === 'terminal');
+    expect(Boolean(await drawn.find({ type: 'Button', key: 'attentionfarm-login', text: 'log in' }))).toBe(true);
+    expect(Boolean(await drawn.find({ type: 'Button', key: 'attentionfarm-signup', text: 'sign up' }))).toBe(true);
     await drawn.unmount();
     const survey = await $.ui.mount({ plugin: 'attentionfarm', surface, component: 'AbovePrompt', requestId: `survey-${surface}`, props: { ...BAND, hasSurvey: true } });
     expect(await survey.find({ type: 'Button', key: 'attentionfarm-signup' })).toBeUndefined();
@@ -147,7 +147,7 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(toasts).toEqual([`you're in, ${MASKED}. we'll email you when earning opens.`]);
   expect(await view.find({ type: 'Text', text: `check ${MASKED} for a 6-digit code` })).toBeUndefined();
   for (const request of sent) {
-    expect(request.headers['x-attentionfarm-mod']).toBe('0.2.0');
+    expect(request.headers['x-attentionfarm-mod']).toBe('0.2.1');
     expect(Object.keys(request.body ?? {}).every(key => ALLOWED_KEYS[request.path].includes(key))).toBe(true);
   }
   const after = view;
@@ -245,7 +245,7 @@ test('resend sends the same email again and says so', async ($, on) => {
 test('session start: restores from the keychain and confirms the session with the server', async ($, on) => {
   const live = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, live.clock);
-  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.2.0', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
+  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.2.1', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
   expect(await (await band($, 'terminal', 'live')).find({ type: 'Button', key: 'attentionfarm-account', text: MASKED })).toBeDefined();
 });
 
@@ -313,11 +313,15 @@ test('logout command works offline and never prints the email, code or token', a
   stateHasNoSecrets([result]);
 });
 
-test('desktop and machines without security: no login, a clear answer', async ($, on) => {
+test('desktop: the band offers sign up and the command opens the flow', async ($, on) => {
   const desktop = world(on);
   await start($, desktop.clock, 'desktop');
-  expect(await $.command.run({ command: 'attentionfarm', args: 'login' })).toMatchObject({ text: 'login works in the claude code terminal on macos for now.' });
-  expect(desktop.opened).toEqual([]);
+  const drawn = await band($, 'desktop');
+  expect(await drawn.find({ type: 'Button', key: 'attentionfarm-signup', text: 'sign up' })).toBeDefined();
+  await drawn.press({ key: 'attentionfarm-signup' });
+  expect(await drawn.find({ type: 'Input', key: 'attentionfarm-email' })).toBeDefined();
+  await drawn.unmount();
+  expect(await $.command.run({ command: 'attentionfarm', args: 'login' })).toMatchObject({ text: 'opened.' });
   expect(desktop.sent).toEqual([]);
 });
 
@@ -326,5 +330,5 @@ test('a terminal without the security tool shows the label only', async ($, on) 
   await start($, bare.clock);
   const drawn = await band($, 'terminal', 'bare');
   expect(await drawn.find({ type: 'Button', key: 'attentionfarm-login' })).toBeUndefined();
-  expect(await $.command.run({ command: 'attentionfarm', args: 'signup' })).toMatchObject({ text: 'login works in the claude code terminal on macos for now.' });
+  expect(await $.command.run({ command: 'attentionfarm', args: 'signup' })).toMatchObject({ text: 'login works in claude code on macos for now.' });
 });
