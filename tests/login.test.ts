@@ -617,3 +617,15 @@ test('free backup: the band names the roster model that answered', async ($, on)
   await step($);
   expect(await view.find({ type: 'Text', text: 'inkling · 1.9k tokens this session · 99 requests left today' })).toBeDefined();
 });
+
+test('free backup: tokens are counted even when the engine stops reading at the stop', async ($, on) => {
+  const { clock } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
+  await start($, clock);
+  const view = await band($, 'terminal');
+  await freeOn($, view);
+  const stream = $.turn.step({ turnId: 'turn-9', index: 0, model: 'claude-opus-5-5', messageCount: 1 });
+  for (let read = await stream.next(); !read.done; read = await stream.next()) {
+    if (read.value.kind === 'stop') { await stream.return(undefined); break; }
+  }
+  expect(await view.find({ type: 'Text', text: 'nemotron 3 ultra · 1.9k tokens this session · 99 requests left today' })).toBeDefined();
+});

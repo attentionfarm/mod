@@ -617,12 +617,13 @@ async function* answerStep($, e) {
     cache_creation_input_tokens: Number(reported.cache_creation_input_tokens) || 0,
     model: typeof data.model === 'string' ? data.model : 'attentionfarm-free',
   };
-  yield { kind: 'stop', stopReason, usage };
+  // Counted before the stop is yielded: the engine may stop reading at the stop, and nothing after it runs.
   try { await update($, TOKENS, tokens => addUsage(tokens, usage)); } catch {}
   try {
     const current = await backupState($);
     if (current.status === 'on') await $.state.set(BACKUP, defined({ ...current, note: undefined, label: label || current.label, remaining: Number.isInteger(current.remaining) ? Math.max(0, current.remaining - 1) : undefined }));
   } catch {}
+  yield { kind: 'stop', stopReason, usage };
   return { turnId: e.turnId, index: e.index, answer, toolUses, stopReason, usage };
 }
 
