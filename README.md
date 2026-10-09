@@ -37,6 +37,7 @@ exit and restart with `claude` after updating.
 - `/attentionfarm signup` or `/attentionfarm login`: opens the sign-in pane. paste the code with or without spaces; it checks itself at 6 digits.
 - `/attentionfarm account`: your account, log out, log out everywhere, delete account.
 - `/attentionfarm logout`: logs this machine out, even offline.
+- `/attentionfarm free`: use free tokens now instead of your claude account (terminal only).
 
 login works in claude code on macos, in the terminal and in the desktop app.
 
@@ -50,7 +51,7 @@ delete account removes your account, sessions and backup keys immediately. see [
 
 ## free backup
 
-when claude stops at a usage limit in a terminal session, the band offers **continue free**. pressing it points this claude code process at attentionfarm, which passes its requests to a free model on openrouter (nemotron 3 ultra to start), and sends "continue where you left off." the band shows which model is answering and how many free requests are left today. **back to claude** puts your own login back.
+when claude stops at a usage limit in a terminal session, the band offers **continue free**. you can also choose it any time: press **use free tokens** in the band, or run `/attentionfarm free`. continuing points this claude code process at attentionfarm, which passes its requests to a free model on openrouter (nemotron 3 ultra to start); after a limit stop it also sends "continue where you left off." the band shows which model is answering and how many free requests are left today. **back to claude** puts your own login back.
 
 - it only switches what this process uses: no file, no `~/.claude` setting, nothing after you quit.
 - it is never offered in the desktop app, a remote session, a cloud provider, or when you use your own api key, gateway or key helper, because there the switch could send your own credential to attentionfarm.

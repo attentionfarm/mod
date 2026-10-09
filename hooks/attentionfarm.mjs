@@ -71,6 +71,8 @@ let apiTarget;
 let bandRequestId = 'AbovePrompt';
 let restoring = false;
 let terminalSession = false;
+let started = false;
+let backupEligible;
 let switching = false;
 // What was typed and the challenge id stay out of $.state, which any plugin can read. The session
 // token is never held here at all: it is read from the keychain when a request needs it.
@@ -448,7 +450,12 @@ async function backupBlocked($) {
   if (hosted.some(value => value && !/^(?:0|false|no|off)$/i.test(value))) return COPY.backupTerminalOnly;
   const entry = await $.env.get('CLAUDE_CODE_ENTRYPOINT');
   if (entry && entry !== 'cli') return COPY.backupTerminalOnly;
-  const own = [await $.env.get('ANTHROPIC_BASE_URL'), await $.env.get('ANTHROPIC_AUTH_TOKEN'), await $.env.get('ANTHROPIC_API_KEY')];
+  const { api } = await target($);
+  const baseUrl = await $.env.get('ANTHROPIC_BASE_URL');
+  const authToken = await $.env.get('ANTHROPIC_AUTH_TOKEN');
+  // Our own switch (backup on, or set before a reload) is not the person's key or gateway.
+  const ours = baseUrl === `${api}/backup` && BACKUP_KEY_PATTERN.test(authToken || '');
+  const own = ours ? [await $.env.get('ANTHROPIC_API_KEY')] : [baseUrl, authToken, await $.env.get('ANTHROPIC_API_KEY')];
   if (own.some(Boolean)) return COPY.backupOwnKey;
   const settings = await $.settings.read().catch(() => ({}));
   if (settings.apiKeyHelper) return COPY.backupOwnKey;
@@ -483,9 +490,10 @@ async function backupState($) {
 
 async function switchToBackup($) {
   if (switching) return;
+  const { reason = 'manual' } = await backupState($);
   const blocked = await backupBlocked($);
   if (blocked) {
-    await $.state.set(BACKUP, { status: 'offer', note: blocked });
+    await $.state.set(BACKUP, { status: 'offer', reason, note: blocked });
     return;
   }
   const { service, api } = await target($);
@@ -504,7 +512,7 @@ async function switchToBackup($) {
     }
     const key = result.data?.key;
     if (result.status !== 200 || !BACKUP_KEY_PATTERN.test(key || '')) {
-      await $.state.set(BACKUP, { status: 'offer', note: result.status === 503 ? COPY.backupUnavailable : errorCopy(result) });
+      await $.state.set(BACKUP, { status: 'offer', reason, note: result.status === 503 ? COPY.backupUnavailable : errorCopy(result) });
       return;
     }
     const betasWereOff = Boolean(await $.env.get('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'));
@@ -514,7 +522,8 @@ async function switchToBackup($) {
     const label = typeof result.data?.model?.label === 'string' ? result.data.model.label.toLowerCase().slice(0, 40) : 'a free model';
     const remaining = Number.isInteger(result.data?.remaining_today) ? result.data.remaining_today : undefined;
     await $.state.set(BACKUP, defined({ status: 'on', label, remaining, ownsBetas: !betasWereOff }));
-    await $.prompt.submit({ text: 'continue where you left off.' }).catch(() => {});
+    // After a limit stop the turn Claude could not finish carries on; a switch by choice waits for the person.
+    if (reason === 'limit') await $.prompt.submit({ text: 'continue where you left off.' }).catch(() => {});
   } finally {
     switching = false;
   }
@@ -532,6 +541,10 @@ async function switchBack($) {
     }
   }
   await $.state.set(BACKUP, INITIAL_BACKUP);
+}
+
+async function offerBackup($, reason) {
+  await $.state.set(BACKUP, { status: 'offer', reason });
 }
 
 async function refreshBackup($) {
@@ -693,10 +706,13 @@ function backupRows($, Box, Text, Button, account, backup, used) {
   }
   if (backup.status !== 'offer') return undefined;
   const loggedIn = account.status === 'in' || account.status === 'offline';
+  const [title, detail] = backup.reason === 'limit'
+    ? ['you hit your claude limit.', 'keep going on a free model through attentionfarm, or wait for claude.']
+    : ['use free tokens instead of claude?', 'this session runs on a free model through attentionfarm until you switch back.'];
   return [
     Box({ flexDirection: 'row', columnGap: 1, children: [
-      line(Text, 'you hit your claude limit.', { bold: true }),
-      line(Text, 'keep going on a free model through attentionfarm, or wait for claude.', { dimColor: true, wrap: 'truncate-end' }),
+      line(Text, title, { bold: true }),
+      line(Text, detail, { dimColor: true, wrap: 'truncate-end' }),
     ] }),
     controls(Box, [
       Button({ key: 'attentionfarm-backup-on', variant: 'secondary', label: loggedIn ? 'continue free' : 'sign up to continue free', onPress: () => switchToBackup($) }),
@@ -709,12 +725,16 @@ function backupRows($, Box, Text, Button, account, backup, used) {
 }
 
 // The resting band: two lines, the wordmark and one action, then the honest line.
-function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0) {
+function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup = false) {
   const { Box, Text, Button } = $.ui.resolve(e);
   const canLogin = LOGIN_SURFACES.has(e.surface) && account.status !== 'unsupported';
   const top = [wordmark(Text), Box({ flexGrow: 1 })];
   let second;
   if (account.status === 'in' || account.status === 'offline') {
+    // Free tokens by choice, not only after a limit: one press shows the offer and what is shared.
+    if (canBackup && backup.status === 'off') {
+      top.push(Button({ key: 'attentionfarm-free', plain: true, label: 'use free tokens', onPress: () => offerBackup($, 'manual') }));
+    }
     top.push(Button({
       key: 'attentionfarm-account', plain: true, dimColor: true,
       label: `${account.masked || 'your account'}${account.status === 'offline' ? ' · offline' : ''}`,
@@ -748,14 +768,16 @@ function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0) {
   return frame(Box, [Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: top }), ...rows], e.surface);
 }
 
-const USAGE = 'use /attentionfarm signup, login, account or logout, or /attentionfarm ticker on, off, pause or resume.';
+const USAGE = 'use /attentionfarm signup, login, account, logout or free, or /attentionfarm ticker on, off, pause or resume.';
 
 export function register(on) {
   on('session.start', async ($, e, next) => {
     const result = await next(e);
-    await $.command.register({ name: 'attentionfarm', description: 'sign up, log in, your account, and the scrolling status line ticker.' });
+    await $.command.register({ name: 'attentionfarm', description: 'sign up, log in, your account, free tokens, and the scrolling status line ticker.' });
     interactive = e.isInteractive;
     terminalSession = e.isInteractive === true && e.surface === 'terminal';
+    started = true;
+    backupEligible = undefined;
     await syncTicker($);
     // $.state outlives a reload; start every load from unknown so a stale answer is never trusted,
     // unless this load already asked: a terminal can draw the band before session.start runs.
@@ -793,7 +815,7 @@ export function register(on) {
     const result = await next(e);
     const backup = await backupState($);
     if (backup.status === 'on') await $.state.set(BACKUP, { ...backup, note: COPY.backupBusy });
-    else if (BACKUP_STOPS.has(e.error) && !(await backupBlocked($))) await $.state.set(BACKUP, { status: 'offer' });
+    else if (BACKUP_STOPS.has(e.error) && !(await backupBlocked($))) await offerBackup($, 'limit');
     return result;
   });
 
@@ -826,12 +848,12 @@ export function register(on) {
       return { text: (await openFlow($, args.startsWith('sign') ? 'signup' : 'login')) ? 'opened.' : COPY.unsupported };
     }
     if (args === 'account') return { text: (await openAccount($)) ? 'opened.' : COPY.unsupported };
-    // Local testing only: shows the backup offer without waiting for a real limit stop.
-    if (args === 'backup' && (await target($)).dev) {
+    if (args === 'free' || args === 'backup') {
+      if ((await backupState($)).status === 'on') return { text: 'free tokens are already on. use back to claude in the band to switch back.' };
       const blocked = await backupBlocked($);
       if (blocked) return { text: blocked };
-      await $.state.set(BACKUP, { status: 'offer' });
-      return { text: 'free backup offered (local worker only).' };
+      await offerBackup($, 'manual');
+      return { text: 'opened.' };
     }
     if (args === 'logout' || args === 'log out') {
       if (!(await usableAccount($))) return { text: COPY.unsupported };
@@ -855,6 +877,9 @@ export function register(on) {
     const backup = await backupState($);
     const { value: tokens = NO_TOKENS } = await $.state.get(TOKENS);
     const used = tokenTotal(tokens);
+    // Worked out once per load, after session.start says whether this is an interactive terminal.
+    if (started && backupEligible === undefined) backupEligible = !(await backupBlocked($).catch(() => COPY.backupTerminalOnly));
+    const canBackup = e.surface === 'terminal' && backupEligible === true;
     if (LOGIN_SURFACES.has(e.surface)) {
       bandRequestId = e.requestId;
       if (account.status === 'unknown') ensureRestore($);
@@ -863,6 +888,6 @@ export function register(on) {
         return Box({ flexDirection: 'column', children: [native, frame(Box, [renderFlow($, e, pane, account)], e.surface)] });
       }
     }
-    return Box({ flexDirection: 'column', children: [native, renderBand($, e, account, backup, used)] });
+    return Box({ flexDirection: 'column', children: [native, renderBand($, e, account, backup, used, canBackup)] });
   });
 }
