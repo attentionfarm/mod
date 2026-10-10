@@ -14,7 +14,7 @@ const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.3.5';
+const MOD_VERSION = '0.3.6';
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
@@ -807,20 +807,59 @@ function backupRows($, Box, Text, Button, account, backup, used) {
   ];
 }
 
+// The exchange: two halves, ink for claude and tide for free af tokens. Whichever side is answering sits
+// up; mid-switch they line up into one circle. Offsets are in the 64-unit drawing.
+const POSES = { claude: [-5, 5], switching: [0, 0], free: [5, -5] };
+let lastPose;
+
+// Desktop draws the real halves; a change of pose slides them there once, then the drawing stays still.
+function exchangeSvg(pose) {
+  const from = lastPose && lastPose !== pose ? POSES[lastPose] : undefined;
+  lastPose = pose;
+  const half = (cls, d, dy, fromDy) => `<path class="${cls}" d="${d}" transform="translate(0 ${dy})">${fromDy === undefined ? ''
+    : `<animateTransform attributeName="transform" type="translate" from="0 ${fromDy}" to="0 ${dy}" dur="0.35s" fill="freeze" calcMode="spline" keyTimes="0;1" keySplines="0.3 0 0.2 1"/>`}</path>`;
+  const [ink, tide] = POSES[pose];
+  return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+    + `<style>.ink{fill:#111111}.tide{fill:${TIDE}}@media (prefers-color-scheme: dark){.ink{fill:#F2F2F2}}</style>`
+    + half('ink', 'M30 10 A22 22 0 0 0 30 54 Z', ink, from?.[0])
+    + half('tide', 'M34 10 A22 22 0 0 1 34 54 Z', tide, from?.[1])
+    + '</svg>';
+}
+
+// The terminal draws the same idea in one row of text: a half block is a half up or down.
+const GLYPHS = { claude: ['▀', '▄'], switching: ['█', '█'], free: ['▄', '▀'] };
+
+function exchangeButton(ui, surface, { key, label, pose, onPress }) {
+  const { Box, Text, Button, Svg } = ui;
+  // The terminal has no vector drawing (an Svg there draws nothing), so it gets the half blocks.
+  if (Svg && surface !== 'terminal') {
+    lastPose ??= pose;
+    return Box({ flexDirection: 'row', alignItems: 'center', columnGap: 1, children: [
+      Svg({ source: exchangeSvg(pose), alt: pose === 'free' ? 'on free af tokens' : pose === 'switching' ? 'switching' : 'on claude', width: 16, height: 16, isInteractive: true }),
+      Button({ key, plain: true, label, onPress }),
+    ] });
+  }
+  const [ink, tide] = GLYPHS[pose];
+  return Button({ key, plain: true, label, onPress, children: [Text({ children: [ink, Text({ color: TIDE, children: [tide] }), ` ${label}`] })] });
+}
+
 // The resting band: two lines, the wordmark and one action, then the honest line.
 function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup = false) {
-  const { Box, Text, Button } = $.ui.resolve(e);
+  const ui = $.ui.resolve(e);
+  const { Box, Text, Button } = ui;
   const canLogin = LOGIN_SURFACES.has(e.surface) && account.status !== 'unsupported';
   const top = [wordmark($, Text, Button), Box({ flexGrow: 1 })];
   // One slot, two states: use free af tokens while on claude, back to claude while on free tokens.
   if (backup.status === 'on') {
-    top.push(Button({ key: 'attentionfarm-backup-off', plain: true, label: 'back to claude', onPress: () => switchBack($) }));
+    top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-backup-off', label: 'back to claude', pose: 'free', onPress: () => switchBack($) }));
+  } else if (backup.status === 'switching') {
+    top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-switching', label: 'switching…', pose: 'switching', onPress: () => {} }));
   }
   let second;
   if (account.status === 'in' || account.status === 'offline') {
     // Free tokens by choice, not only after a limit: one press switches.
     if (canBackup && backup.status === 'off') {
-      top.push(Button({ key: 'attentionfarm-free', plain: true, label: 'use free af tokens', onPress: () => switchToBackup($) }));
+      top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-free', label: 'use free af tokens', pose: 'claude', onPress: () => switchToBackup($) }));
     }
     top.push(Button({
       key: 'attentionfarm-account', plain: true, dimColor: true,
