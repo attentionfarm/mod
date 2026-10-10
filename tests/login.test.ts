@@ -14,6 +14,15 @@ const FREE_USAGE = { input_tokens: 1200, output_tokens: 300, cache_read_input_to
 const FREE_REPLY = { id: 'gen-1', type: 'message', role: 'assistant', model: 'nvidia/nemotron-3-ultra-550b-a55b:free', content: [{ type: 'thinking', thinking: 'let me look' }, { type: 'text', text: 'here they are' }], stop_reason: 'end_turn', usage: FREE_USAGE };
 const FREE_TOOL_REPLY = { ...FREE_REPLY, content: [{ type: 'tool_use', id: 'toolu_free_1', name: 'Bash', input: { command: 'ls', description: 'list files' } }], stop_reason: 'tool_use' };
 const SURFACES = ['terminal', 'desktop'] as const;
+const ROSTER = [
+  { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', label: 'nemotron 3 ultra' },
+  { id: 'cohere/north-mini-code:free', label: 'north mini code' },
+  { id: 'poolside/laguna-s-2.1:free', label: 'laguna s 2.1' },
+];
+const LISTED = {
+  '/backup/status': { status: 200, body: { available: true, model: ROSTER[0], models: ROSTER, daily_requests: 100, remaining_today: 87 } },
+  '/backup/key': { status: 200, body: { key: BACKUP_KEY, base_path: '/api/mod/backup', model: ROSTER[0], models: ROSTER, daily_requests: 100, remaining_today: 100 } },
+} as const;
 const BAND = { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {} } as const;
 const PANE_PROPS = { title: 'attentionfarm', isFocused: true, bodyColumns: 80, placement: 'inline', scroll: { offset: 0, bodyRows: 8 }, view: {} } as const;
 const ALLOWED_KEYS: Record<string, string[]> = {
@@ -30,9 +39,13 @@ const ALLOWED_KEYS: Record<string, string[]> = {
 type Reply = { status: number; body?: unknown; headers?: Record<string, string> } | 'offline';
 type Sent = { path: string; method: string; headers: Record<string, string>; body?: Record<string, unknown> };
 
-function world(on: On, options: { keychain?: { token: string; comment: string }; replies?: Record<string, Reply | Reply[]>; security?: boolean; toolCheck?: Record<string, unknown> } = {}) {
+function world(on: On, options: { keychain?: { token: string; comment: string }; replies?: Record<string, Reply | Reply[]>; security?: boolean; toolCheck?: Record<string, unknown>; store?: Record<string, unknown> } = {}) {
   const clock = mock.clock(on, { now: 1_000_000 });
   mock.env(on, {});
+  // The plugin's store between sessions, answered from memory so a test can read what was kept.
+  const stored: Record<string, unknown> = { ...options.store };
+  on('store.get', ($, e: any) => ({ value: stored[e.key] }) as any);
+  on('store.set', ($, e: any) => { stored[e.key] = e.value; return { value: undefined } as any; });
   const submitted: string[] = [];
   on('prompt.submit', ($, e) => { submitted.push(e.text); return { text: e.text, context: [] } as any; });
   on('classic.StopFailure', () => ({}));
@@ -105,7 +118,7 @@ function world(on: On, options: { keychain?: { token: string; comment: string };
     const hex = [...new TextEncoder().encode(keychain.comment)].map(b => b.toString(16).padStart(2, '0').toUpperCase()).join('');
     return { value: { exitCode: 0, stdout: `    "icmt"<blob>=0x${hex}  "escaped"\n`, stderr: '' } };
   });
-  return { clock, sent, toasts, opened, closed, focused, runs, written, submitted, engine, keychain: () => keychain };
+  return { stored, clock, sent, toasts, opened, closed, focused, runs, written, submitted, engine, keychain: () => keychain };
 }
 
 async function start($: any, clock: { advance: (ms: number) => Promise<void> }, surface: 'terminal' | 'desktop' = 'terminal') {
@@ -185,7 +198,7 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(await view.find({ type: 'Text', text: "you're in." })).toBeUndefined();
   expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
   for (const request of sent) {
-    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.12');
+    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.13');
     expect(Object.keys(request.body ?? {}).every(key => ALLOWED_KEYS[request.path].includes(key))).toBe(true);
   }
   const after = view;
@@ -286,7 +299,8 @@ test('resend sends the same email again and says so', async ($, on) => {
 test('session start: restores from the keychain and confirms the session with the server', async ($, on) => {
   const live = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, live.clock);
-  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.12', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
+  // The session, then the free models for the picker.
+  expect(live.sent).toEqual(['/me', '/backup/status'].map(path => ({ path, method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.13', authorization: `Bearer ${TOKEN}` }, body: undefined })));
   expect(await (await band($, 'terminal', 'live')).find({ type: 'Button', key: 'attentionfarm-account', text: MASKED })).toBeDefined();
 });
 
@@ -717,4 +731,64 @@ test('free backup: tokens are counted even when the engine stops reading at the 
     if (read.value.kind === 'stop') { await stream.return(undefined); break; }
   }
   expect(await view.find({ type: 'Text', text: 'nemotron 3 ultra · 1.9k tokens this session · 99 requests left today' })).toBeDefined();
+});
+
+for (const surface of SURFACES) {
+  test(`model picker on ${surface}: under the email, every free model attentionfarm offers, the first by default`, async ($, on) => {
+    const { clock } = world(on, { keychain: { token: TOKEN, comment: MASKED }, replies: { ...LISTED } });
+    await start($, clock, surface);
+    const view = await band($, surface);
+    const picker = await view.find({ type: 'Select', key: 'attentionfarm-model' });
+    expect(picker?.props).toMatchObject({ label: 'model', value: ROSTER[0].id, options: ROSTER.map(model => ({ value: model.id, label: model.label })) });
+    // The email ends the first line, the picker the second: one under the other, at the right.
+    const tree = JSON.stringify(await view.drawn());
+    expect(tree.indexOf(MASKED)).toBeLessThan(tree.indexOf('attentionfarm-model'));
+  });
+}
+
+test('model picker: a pick is asked first by the next free step, kept for the next session, and named in the band', async ($, on) => {
+  const { clock, sent, stored } = world(on, { keychain: { token: TOKEN, comment: MASKED }, replies: { ...LISTED } });
+  await start($, clock);
+  const view = await band($, 'terminal');
+  await view.select({ key: 'attentionfarm-model', value: ROSTER[2].id });
+  expect((await view.find({ type: 'Select', key: 'attentionfarm-model' }))?.props.value).toBe(ROSTER[2].id);
+  expect(stored.freeModel).toBe(ROSTER[2].id);
+  await freeOn($, view);
+  // On free tokens the picker stays beside the line, and the line doesn't name the model twice.
+  expect((await view.find({ type: 'Select', key: 'attentionfarm-model' }))?.props.value).toBe(ROSTER[2].id);
+  await step($);
+  expect(sent.filter(request => request.path === '/backup/v1/messages').map(request => request.body?.model)).toEqual([ROSTER[2].id]);
+  expect(await view.find({ type: 'Text', text: '1.9k tokens this session · 99 requests left today' })).toBeDefined();
+});
+
+test('model picker: when the pick was busy and another model answered, the band says which', async ($, on) => {
+  const { clock } = world(on, { keychain: { token: TOKEN, comment: MASKED }, store: { freeModel: ROSTER[2].id }, replies: { ...LISTED, '/backup/v1/messages': { status: 200, body: FREE_REPLY, headers: { 'x-attentionfarm-model-label': 'nemotron 3 ultra' } } } });
+  await start($, clock);
+  const view = await band($, 'terminal');
+  expect((await view.find({ type: 'Select', key: 'attentionfarm-model' }))?.props.value).toBe(ROSTER[2].id);
+  await freeOn($, view);
+  await step($);
+  expect(await view.find({ type: 'Text', text: 'answered by nemotron 3 ultra · 1.9k tokens this session · 99 requests left today' })).toBeDefined();
+});
+
+test('model picker: a kept pick the roster dropped falls back to the server order', async ($, on) => {
+  const gone = world(on, { keychain: { token: TOKEN, comment: MASKED }, store: { freeModel: 'retired/model:free' }, replies: { ...LISTED } });
+  await start($, gone.clock);
+  const view = await band($, 'terminal', 'gone');
+  expect((await view.find({ type: 'Select', key: 'attentionfarm-model' }))?.props.value).toBe(ROSTER[0].id);
+  await freeOn($, view);
+  await step($);
+  expect(gone.sent.filter(request => request.path === '/backup/v1/messages').map(request => request.body?.model)).toEqual(['attentionfarm-free']);
+});
+
+test('model picker: hidden when the server lists no models, and when logged out', async ($, on) => {
+  const old = world(on, { keychain: { token: TOKEN, comment: MASKED } });
+  await start($, old.clock);
+  expect(await (await band($, 'terminal', 'old')).find({ type: 'Select', key: 'attentionfarm-model' })).toBeUndefined();
+});
+
+test('model picker: hidden when logged out', async ($, on) => {
+  const { clock } = world(on, { replies: { ...LISTED } });
+  await start($, clock);
+  expect(await (await band($, 'desktop')).find({ type: 'Select', key: 'attentionfarm-model' })).toBeUndefined();
 });

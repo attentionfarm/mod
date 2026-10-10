@@ -12,6 +12,10 @@ declare module 'claude-code' {
       backupTokens: { input: number; output: number; cacheRead: number; cacheCreation: number; steps: number };
       // Which half of the exchange switch sits up: 0 claude, 1 free af tokens; between while it moves.
       switchPose: number;
+      // The free models attentionfarm offers (free OpenRouter ids and short labels), and the one picked in the band.
+      freeModels: { id: string; label: string }[];
+      // '' when nothing is picked: the server tries its roster in its own order.
+      freeModel: string;
       pane: {
         site: 'none' | 'pane' | 'band';
         step: 'email' | 'code' | 'account' | 'delete';

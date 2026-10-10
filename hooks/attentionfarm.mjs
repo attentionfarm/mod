@@ -10,12 +10,18 @@ const BACKUP = { plugin: 'attentionfarm', key: 'backup' };
 // request's own usage. Its own key, so switching back to claude keeps it.
 const TOKENS = { plugin: 'attentionfarm', key: 'backupTokens' };
 const SWITCH = { plugin: 'attentionfarm', key: 'switchPose' };
+// The free models attentionfarm offers, as the server lists them, and the one the person picked. The pick
+// is also kept in $.store, so the next session starts on it.
+const FREE_MODELS = { plugin: 'attentionfarm', key: 'freeModels' };
+const FREE_MODEL = { plugin: 'attentionfarm', key: 'freeModel' };
+const FREE_MODEL_STORE = 'freeModel';
+const FREE_MODEL_PATTERN = /^[a-z0-9._-]+\/[a-z0-9._-]+:free$/;
 const NO_TOKENS = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, steps: 0 };
 const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.3.12';
+const MOD_VERSION = '0.3.13';
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
@@ -374,6 +380,7 @@ async function verifyCode($, typed) {
   flow.typedEmail = '';
   await $.state.set(ACCOUNT, { status: 'in', masked, flash: created ? 'new' : 'back' });
   await $.state.set(PANE, { ...INITIAL_PANE });
+  loadModels($, token).catch(() => {});
   await $.ui.close({ id: PANE_ID }).catch(() => {});
   // The band says "you're in." for a few seconds, then settles; no toast to miss.
   $.clock.after(FLASH_MS, async () => {
@@ -484,10 +491,48 @@ async function mintBackupKey($) {
     return { note: result.status === 503 ? COPY.backupUnavailable : errorCopy(result) };
   }
   backupKey = key;
+  await rememberModels($, result.data).catch(() => {});
+  const picked = await pickedModel($).catch(() => undefined);
   return {
-    label: typeof result.data?.model?.label === 'string' ? result.data.model.label.toLowerCase().slice(0, 40) : 'a free model',
+    label: picked?.label || (typeof result.data?.model?.label === 'string' ? result.data.model.label.toLowerCase().slice(0, 40) : 'a free model'),
     remaining: Number.isInteger(result.data?.remaining_today) ? result.data.remaining_today : undefined,
   };
+}
+
+// The roster from a /backup reply: free ids only, short labels. A pick the roster no longer holds is dropped.
+async function rememberModels($, data) {
+  if (!Array.isArray(data?.models)) return;
+  const models = data.models
+    .filter(model => FREE_MODEL_PATTERN.test(model?.id || '') && typeof model.label === 'string')
+    .slice(0, 20)
+    .map(model => ({ id: model.id, label: model.label.toLowerCase().slice(0, 40) }));
+  if (!models.length) return;
+  await $.state.set(FREE_MODELS, models);
+  const stored = await $.store.get(FREE_MODEL_STORE).catch(() => undefined);
+  // '' is no pick: the server's own order.
+  await $.state.set(FREE_MODEL, models.some(model => model.id === stored) ? stored : '');
+}
+
+async function loadModels($, token) {
+  const result = await request($, 'GET', '/backup/status', { token });
+  if (result.status === 200) await rememberModels($, result.data);
+}
+
+// A pick from the band. The next free step asks that model first; while free tokens are on, the band names it.
+async function pickModel($, id) {
+  const { value: models = [] } = await $.state.get(FREE_MODELS);
+  const model = models.find(item => item.id === id);
+  if (!model) return;
+  await $.state.set(FREE_MODEL, id);
+  await $.store.set(FREE_MODEL_STORE, id).catch(() => {});
+  const backup = await backupState($);
+  if (backup.status === 'on') await setBackup($, { ...backup, label: model.label });
+}
+
+async function pickedModel($) {
+  const { value: id } = await $.state.get(FREE_MODEL);
+  const { value: models = [] } = await $.state.get(FREE_MODELS);
+  return models.find(model => model.id === id);
 }
 
 // Which half sits up: 0 claude, 1 free af tokens. The band draws the switch from this number alone.
@@ -581,7 +626,9 @@ async function askFreeModel($, e) {
   const found = e.agentId ? await $.session.messages({ agentId: e.agentId, as: 'api' }) : await $.session.messages({ as: 'api' });
   if (!Array.isArray(found)) return { note: COPY.backupUnavailable };
   const tools = (await $.tool.list()).map(tool => ({ name: tool.name, description: tool.description, input_schema: TOOL_SCHEMAS[tool.name] || ANY_INPUT }));
-  const body = JSON.stringify(defined({ model: 'attentionfarm-free', max_tokens: STEP_MAX_TOKENS, system: systemPrompt || undefined, messages: found, tools, stream: false }));
+  // The picked model goes first at the server; with no pick, the server's own order.
+  const picked = await pickedModel($).catch(() => undefined);
+  const body = JSON.stringify(defined({ model: picked?.id || 'attentionfarm-free', max_tokens: STEP_MAX_TOKENS, system: systemPrompt || undefined, messages: found, tools, stream: false }));
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (!backupKey) {
       const minted = await mintBackupKey($);
@@ -702,6 +749,7 @@ async function restore($) {
   const email = result.data?.account?.email;
   if (result.status === 200 && typeof email === 'string' && email.includes('@')) {
     await $.state.set(ACCOUNT, { status: 'in', masked: maskEmail(email) });
+    await loadModels($, token).catch(() => {});
   } else if (result.status === 401) {
     await keychainForget($, service);
     await $.state.set(ACCOUNT, { status: 'out' });
@@ -829,15 +877,18 @@ function renderFlow($, e, pane, account) {
 }
 
 // Free backup in the band: the offer after a limit stop, then which model is answering and the way back.
-function backupRows($, Box, Text, Button, account, backup, used) {
+function backupRows($, Box, Text, Button, account, backup, used, picker, pickedLabel) {
   if (backup.status === 'switching') return [line(Text, 'switching to free backup…', { dimColor: true })];
   if (backup.status === 'on') {
-    const spent = ` · ${formatTokens(used)} tokens this session`;
+    const spent = `${formatTokens(used)} tokens this session`;
     const left = Number.isInteger(backup.remaining) ? ` · ${backup.remaining} requests left today` : '';
+    // With the picker beside it, the line names a model only when a different one answered (the pick was busy).
+    const who = !picker ? `${backup.label || 'a free model'} · ` : backup.label && backup.label !== pickedLabel ? `answered by ${backup.label} · ` : '';
     return [
       Box({ flexDirection: 'row', alignItems: 'center', columnGap: 1, children: [
         line(Text, 'free backup', { bold: true }),
-        line(Text, `${backup.label || 'a free model'}${spent}${left}`, { dimColor: true, wrap: 'truncate-end' }),
+        Box({ flexShrink: 1, children: [line(Text, `${who}${spent}${left}`, { dimColor: true, wrap: 'truncate-end' })] }),
+        ...(picker ? [Box({ flexGrow: 1 }), Box({ key: 'attentionfarm-model-slot', flexShrink: 0, children: [picker] })] : []),
       ] }),
       ...(backup.note ? [line(Text, backup.note, { dimColor: true, wrap: 'truncate-end' })] : []),
     ];
@@ -909,8 +960,21 @@ function exchangeButton(ui, surface, { key, label, pose: t, onPress }) {
   ] });
 }
 
+// The model picker, under the email: the free models attentionfarm offers, one picked. Desktop draws it as a
+// dropdown; the terminal as a picker the arrows move through.
+function modelPicker($, ui, models, picked) {
+  const { Select } = ui;
+  if (!Select || !models.length) return undefined;
+  return Select({
+    key: 'attentionfarm-model', label: 'model',
+    options: models.map(model => ({ value: model.id, label: model.label })),
+    value: (picked || models[0]).id,
+    onSelect: value => pickModel($, value),
+  });
+}
+
 // The resting band: two lines, the wordmark and one action, then the honest line.
-function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup = false, pose = switchTarget(backup)) {
+function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup = false, pose = switchTarget(backup), free = { models: [] }) {
   const ui = $.ui.resolve(e);
   const { Box, Text, Button } = ui;
   const canLogin = LOGIN_SURFACES.has(e.surface) && account.status !== 'unsupported';
@@ -956,7 +1020,17 @@ function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup 
       line(Text, `${formatTokens(used)} free tokens this session`, { dimColor: true }),
     ] });
   }
-  const rows = backupRows($, Box, Text, Button, account, backup, used) || [second];
+  // The picker sits at the right end of the second line, under the email, while signed in on claude or free tokens.
+  const picker = loggedIn && canBackup && (backup.status === 'off' || backup.status === 'on') ? modelPicker($, ui, free.models, free.picked) : undefined;
+  if (picker && backup.status === 'off') {
+    second = Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: [
+      Box({ flexShrink: 1, children: [second] }),
+      Box({ flexGrow: 1 }),
+      Box({ key: 'attentionfarm-model-slot', flexShrink: 0, children: [picker] }),
+    ] });
+  }
+  const pickedLabel = (free.picked || free.models[0])?.label;
+  const rows = backupRows($, Box, Text, Button, account, backup, used, picker, pickedLabel) || [second];
   return frame(Box, [Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: top }), ...rows], e.surface);
 }
 
@@ -1076,6 +1150,9 @@ export function register(on) {
     const { value: tokens = NO_TOKENS } = await $.state.get(TOKENS);
     const used = tokenTotal(tokens);
     const { value: pose = switchTarget(backup) } = await $.state.get(SWITCH);
+    const { value: models = [] } = await $.state.get(FREE_MODELS);
+    const { value: pickedId } = await $.state.get(FREE_MODEL);
+    const free = { models, picked: models.find(model => model.id === pickedId) };
     const canBackup = LOGIN_SURFACES.has(e.surface);
     if (LOGIN_SURFACES.has(e.surface)) {
       bandRequestId = e.requestId;
@@ -1085,6 +1162,6 @@ export function register(on) {
         return Box({ flexDirection: 'column', children: [native, frame(Box, [renderFlow($, e, pane, account)], e.surface)] });
       }
     }
-    return Box({ flexDirection: 'column', children: [native, renderBand($, e, account, backup, used, canBackup, pose)] });
+    return Box({ flexDirection: 'column', children: [native, renderBand($, e, account, backup, used, canBackup, pose, free)] });
   });
 }
