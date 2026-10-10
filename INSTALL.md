@@ -40,6 +40,10 @@ login works in the claude code terminal on macos. your session key is kept in yo
 
 `/attentionfarm ticker off` hides the ticker; `on`, `pause` and `resume` control it. the scrolling status line is a cli surface; desktop display remains unverified.
 
+## watch ad, get tokens
+
+press **watch ad, get tokens** in the band, or run `/attentionfarm ad`: a 15 second ad that can't be skipped earns 1,000,000 tokens, spent on a paid model once today's free requests are used up. pictures play in the claude desktop app and in terminals that show images (ghostty, kitty); other terminals show the countdown. see the readme for what an ad view records.
+
 ## uninstall
 
 ```sh

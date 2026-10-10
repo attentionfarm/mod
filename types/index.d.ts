@@ -16,6 +16,9 @@ declare module 'claude-code' {
       freeModels: { id: string; label: string }[];
       // '' when nothing is picked: the server tries its roster in its own order.
       freeModel: string;
+      // Watch ad, get tokens, as the server last said: whether earning exists, whether an ad can be watched now,
+      // why not (a limit's message), tokens earned and not yet spent, an ad's worth and ads left today.
+      earn: { enabled?: boolean; available: boolean; message?: string; earned: number; tokensPerAd?: number; adsLeft?: number };
       pane: {
         site: 'none' | 'pane' | 'band';
         step: 'email' | 'code' | 'account' | 'delete';

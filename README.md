@@ -38,6 +38,7 @@ exit and restart with `claude` after updating.
 - `/attentionfarm account`: your account, log out, delete account.
 - `/attentionfarm logout`: logs this machine out, even offline.
 - `/attentionfarm free`: use free af tokens now instead of your claude account.
+- `/attentionfarm ad`: watch a 15 second ad and earn 1,000,000 tokens.
 
 login works in claude code on macos, in the terminal and in the desktop app.
 
@@ -59,6 +60,16 @@ when claude stops at a usage limit, the band offers **continue free**. you can a
 - attentionfarm keeps none of your prompts or code, but free models' hosts may keep and learn from what they receive.
 - each account gets a daily number of free requests. it resets at midnight utc.
 - the band counts the free tokens this session used, from each reply's own usage, on your machine. `/clear` starts it again.
+
+## watch ad, get tokens
+
+press **watch ad, get tokens** in the band, or run `/attentionfarm ad`. a 15 second ad plays, either in a side panel or in the band above your text box (each account gets one of the two, at random, so we can learn which works better). it can't be skipped: while it plays the chat is frosted and anything you send waits until it ends. when it ends, **1,000,000 tokens** are added to your account.
+
+- earned tokens are used once your free backup requests for the day run out: free tokens first, then a paid model (deepseek v4 flash) through attentionfarm, on your earned tokens. every token a request uses counts, including the conversation claude code sends again with each request.
+- the band shows what you have left (`2m earned`), and offers **watch ad, get more** when today's free requests are used up.
+- up to 10 ads a person a day, and a daily limit across everyone; the band says when ads are full until midnight utc.
+- what an ad view tells attentionfarm: where it played, terminal or desktop, the day, whether it played to the end and for how many seconds, and how many messages you sent while it played (only the count, never what they said).
+- earned tokens are only for compute in claude code. they are never money.
 
 ## ticker controls
 

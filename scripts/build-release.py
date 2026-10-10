@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package the seven allowlisted mod files as a deterministic local-import ZIP."""
+"""Package the allowlisted mod files (code, docs and the house ad's assets) as a deterministic local-import ZIP."""
 import argparse
 import hashlib
 import json
@@ -12,14 +12,16 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output-dir', type=Path, default=root / 'dist')
 args = parser.parse_args()
 paths = ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/attentionfarm.mjs', 'hooks/tool-schemas.mjs', 'types/index.d.ts', 'README.md', 'INSTALL.md']
+# The house ad: 180 frames and its sound, under assets/ad.
+paths += [f'assets/ad/f{i:03d}.png' for i in range(180)] + ['assets/ad/house-ad.m4a']
 manifest = json.loads((root / paths[0]).read_text())
-if manifest['name'] != 'attentionfarm' or manifest['version'] != '0.3.14':
+if manifest['name'] != 'attentionfarm' or manifest['version'] != '0.4.0':
     raise SystemExit('Unexpected candidate identity/version')
 for relative in paths:
     if not (root / relative).is_file() or (root / relative).is_symlink():
         raise SystemExit(f'Missing or linked release input: {relative}')
 args.output_dir.mkdir(parents=True, exist_ok=True)
-archive = args.output_dir / 'attentionfarm-mod-v0.3.14.zip'
+archive = args.output_dir / 'attentionfarm-mod-v0.4.0.zip'
 records = []
 with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as bundle:
     for relative in sorted(paths):

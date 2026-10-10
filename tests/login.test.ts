@@ -34,6 +34,10 @@ const ALLOWED_KEYS: Record<string, string[]> = {
   '/backup/key': [],
   '/backup/v1/messages': ['model', 'max_tokens', 'system', 'messages', 'tools', 'stream'],
   '/backup/status': [],
+  // An ad view tells the server only these, never a message's text.
+  '/ad/status': [],
+  '/ad/start': ['surface'],
+  '/ad/finish': ['view_id', 'completed', 'seconds_watched', 'held_messages', 'surface'],
 };
 
 type Reply = { status: number; body?: unknown; headers?: Record<string, string> } | 'offline';
@@ -198,7 +202,7 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(await view.find({ type: 'Text', text: "you're in." })).toBeUndefined();
   expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
   for (const request of sent) {
-    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.14');
+    expect(request.headers['x-attentionfarm-mod']).toBe('0.4.0');
     expect(Object.keys(request.body ?? {}).every(key => ALLOWED_KEYS[request.path].includes(key))).toBe(true);
   }
   const after = view;
@@ -300,7 +304,7 @@ test('session start: restores from the keychain and confirms the session with th
   const live = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, live.clock);
   // The session, then the free models for the picker.
-  expect(live.sent).toEqual(['/me', '/backup/status'].map(path => ({ path, method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.14', authorization: `Bearer ${TOKEN}` }, body: undefined })));
+  expect(live.sent).toEqual(['/me', '/backup/status', '/ad/status'].map(path => ({ path, method: 'GET', headers: { 'x-attentionfarm-mod': '0.4.0', authorization: `Bearer ${TOKEN}` }, body: undefined })));
   expect(await (await band($, 'terminal', 'live')).find({ type: 'Button', key: 'attentionfarm-account', text: MASKED })).toBeDefined();
 });
 
@@ -800,4 +804,135 @@ test('model picker: hidden when logged out', async ($, on) => {
   const { clock } = world(on, { replies: { ...LISTED } });
   await start($, clock);
   expect(await (await band($, 'desktop')).find({ type: 'Select', key: 'attentionfarm-model' })).toBeUndefined();
+});
+
+// --- watch ad, get tokens --------------------------------------------------
+
+const VIEW = `adv_${'v'.repeat(22)}`;
+const EARN_STATUS = { available: true, placement: 'pane', seconds: 15, tokens_per_ad: 1_000_000, ads_left_today: 10, earned_tokens: 0, model: { id: 'deepseek/deepseek-v4-flash', label: 'deepseek v4 flash' } };
+const earnReplies = (placement: 'pane' | 'band' = 'pane', extra: Record<string, Reply | Reply[]> = {}) => ({
+  '/ad/status': { status: 200, body: { ...EARN_STATUS, placement } },
+  '/ad/start': { status: 200, body: { ...EARN_STATUS, placement, view_id: VIEW } },
+  '/ad/finish': { status: 200, body: { earned: 1_000_000, earned_tokens: 1_000_000 } },
+  ...extra,
+});
+// What playing the ad reaches beneath the mod: its pane list, its frames on disk, its sound and the terminal's blits.
+function adWorld(on: On, w: { opened: string[]; closed: string[] }) {
+  const played: string[] = [];
+  const blits: string[] = [];
+  // The panes open now: those opened since the person last closed them (the list is only read while the ad plays).
+  let since = 0;
+  const panes = () => [...new Set(w.opened.slice(since))];
+  on('ui.panes', () => ({ value: panes().map(id => ({ id, isShown: true, isPlaced: true })) }) as any);
+  on('fs.read', () => ({ value: { base64: 'iVBORw0KGgo=' } }) as any);
+  on('audio.play', ($, e: any) => { played.push(e.clip?.asset ?? e.asset); return { value: undefined } as any; });
+  on('ui.blit', ($, e: any) => { blits.push(e.source?.file ?? 'cells'); return { value: {} } as any; });
+  on('ui.render', { component: 'UserMessage' }, ($, e: any) => ({ type: 'Text', props: {}, children: [e.props.text] }) as any);
+  return { played, blits, closePanes: () => { since = w.opened.length; }, panes };
+}
+const drawnText = async (view: any) => JSON.stringify(await view.drawn());
+
+for (const surface of SURFACES) {
+  test(`watch ad on ${surface}: the band offers it, the ad plays with the chat frosted, and the tokens land when it ends`, async ($, on) => {
+    const w = world(on, { keychain: { token: TOKEN, comment: MASKED }, replies: earnReplies('pane') });
+    const a = adWorld(on, w);
+    await start($, w.clock, surface);
+    const view = await band($, surface);
+    expect(await view.find({ type: 'Text', text: 'watch ad, get tokens' })).toBeDefined();
+    expect(await view.find({ type: 'Text', text: '1m tokens for 15 seconds' })).toBeDefined();
+    const message = await $.ui.mount({ plugin: 'attentionfarm', surface, component: 'UserMessage', requestId: 'm1', props: { text: 'list the files' } as any });
+    await view.press({ key: 'attentionfarm-watch' });
+    expect(w.sent.find(request => request.path === '/ad/start')?.body).toEqual({ surface });
+    expect(w.opened).toContain('attentionfarm-ad');
+    expect(a.played).toEqual(['assets/ad/house-ad.m4a']);
+    // The chat is frosted, not gone, and the band counts down.
+    expect(await drawnText(message)).toContain('░░░░ ░░░ ░░░░░');
+    expect(await drawnText(view)).toContain('ad · 15s · the chat is back when it ends');
+    const adPane = await $.ui.mount({ plugin: 'attentionfarm', surface, component: 'Pane', requestId: 'attentionfarm-ad', props: PANE_PROPS });
+    expect(await drawnText(adPane)).toContain(surface === 'terminal' ? '"Image"' : '"Svg"');
+    await w.clock.advance(15100);
+    // The server is told the view, that it played to the end, the seconds, the surface, and a count of held messages.
+    expect(w.sent.find(request => request.path === '/ad/finish')?.body).toEqual({ view_id: VIEW, completed: true, seconds_watched: 15, held_messages: 0, surface });
+    expect(w.toasts).toContain('+1m tokens. 1m earned to spend.');
+    expect(w.closed).toContain('attentionfarm-ad');
+    expect(await drawnText(message)).toContain('list the files');
+    // The earned balance stays in view.
+    expect(await view.find({ type: 'Text', text: '1m' })).toBeDefined();
+    expect(await view.find({ type: 'Text', text: ' earned' })).toBeDefined();
+  });
+}
+
+test('watch ad: placed in the band, the band draws the ad itself and no pane opens', async ($, on) => {
+  const w = world(on, { keychain: { token: TOKEN, comment: MASKED }, replies: earnReplies('band') });
+  adWorld(on, w);
+  await start($, w.clock, 'desktop');
+  const view = await band($, 'desktop');
+  await view.press({ key: 'attentionfarm-watch' });
+  await w.clock.advance(100);
+  expect(w.opened).not.toContain('attentionfarm-ad');
+  const drawn = await drawnText(view);
+  expect(drawn).toContain('"Svg"');
+  expect(drawn).toContain('ad · 15s');
+});
+
+test('watch ad: it cannot be stopped, a closed pane opens again, and a message sent meanwhile waits for the end', async ($, on) => {
+  const w = world(on, { keychain: { token: TOKEN, comment: MASKED }, replies: earnReplies('pane') });
+  const a = adWorld(on, w);
+  await start($, w.clock);
+  const view = await band($, 'terminal');
+  await view.press({ key: 'attentionfarm-watch' });
+  expect(await $.command.run({ command: 'attentionfarm', args: 'ad' })).toMatchObject({ text: expect.stringContaining('already playing') });
+  await w.clock.advance(2000);
+  const held = await $.prompt.submit({ text: 'and the tests', origin: { kind: 'composer' } } as any);
+  expect(held).toMatchObject({ drop: expect.stringContaining('held until the ad ends') });
+  a.closePanes();
+  await w.clock.advance(1100);
+  expect(a.panes()).toContain('attentionfarm-ad');
+  await w.clock.advance(12100);
+  expect(w.submitted).toContain('and the tests');
+  expect(w.sent.find(request => request.path === '/ad/finish')?.body?.held_messages).toBe(1);
+});
+
+test('watch ad: a session that ends mid-ad reports the view as left, never as watched', async ($, on) => {
+  const w = world(on, { keychain: { token: TOKEN, comment: MASKED }, replies: earnReplies('pane') });
+  adWorld(on, w);
+  await start($, w.clock);
+  await (await band($, 'terminal')).press({ key: 'attentionfarm-watch' });
+  await w.clock.advance(6000);
+  await $.session.end({ sessionId: 's1', reason: 'exit' } as any);
+  await w.clock.advance(0);
+  expect(w.sent.find(request => request.path === '/ad/finish')?.body).toMatchObject({ view_id: VIEW, completed: false });
+});
+
+test('watch ad: when the day is full the band says so instead of offering an ad', async ($, on) => {
+  const w = world(on, { keychain: { token: TOKEN, comment: MASKED }, replies: earnReplies('pane', {
+    '/ad/status': { status: 200, body: { ...EARN_STATUS, available: false, reason: 'daily_limit', message: 'ads are full for today. they come back at midnight utc.' } },
+  }) });
+  await start($, w.clock);
+  const view = await band($, 'terminal');
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-watch' })).toBeUndefined();
+  expect(await view.find({ type: 'Text', text: 'ads are full for today. they come back at midnight utc.' })).toBeDefined();
+});
+
+test('watch ad: hidden when earning is off, and when logged out', async ($, on) => {
+  const off = world(on, { keychain: { token: TOKEN, comment: MASKED }, replies: { '/ad/status': { status: 200, body: { ...EARN_STATUS, available: false } } } });
+  await start($, off.clock);
+  expect(await (await band($, 'terminal', 'off')).find({ type: 'Button', key: 'attentionfarm-watch' })).toBeUndefined();
+});
+
+test('free tokens used up: the band offers an ad, and a paid reply keeps the earned balance current', async ($, on) => {
+  const w = world(on, { keychain: { token: TOKEN, comment: MASKED }, replies: earnReplies('pane', {
+    '/backup/key': { status: 200, body: { ...LISTED['/backup/key'].body, earn_available: true, earned_tokens: 2_000_000 } },
+    '/backup/v1/messages': [
+      { status: 429, body: { type: 'error', error: { type: 'rate_limit_error', message: "today's free attentionfarm backup is used up. watch an ad in the attentionfarm band for more tokens, or wait for midnight utc." } } },
+      { status: 200, body: FREE_REPLY, headers: { 'x-attentionfarm-model-label': 'deepseek v4 flash', 'x-attentionfarm-earned-tokens': '1500000' } },
+    ],
+  }) });
+  await start($, w.clock);
+  const view = await band($, 'terminal');
+  await freeOn($, view);
+  await step($);
+  expect(await view.find({ type: 'Text', text: 'watch ad, get more' })).toBeDefined();
+  await step($);
+  expect(await view.find({ type: 'Text', text: '1.5m' })).toBeDefined();
 });

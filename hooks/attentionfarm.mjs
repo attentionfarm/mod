@@ -15,13 +15,16 @@ const SWITCH = { plugin: 'attentionfarm', key: 'switchPose' };
 const FREE_MODELS = { plugin: 'attentionfarm', key: 'freeModels' };
 const FREE_MODEL = { plugin: 'attentionfarm', key: 'freeModel' };
 const FREE_MODEL_STORE = 'freeModel';
+// Watch ad, get tokens: whether an ad can be watched now, why not, and the tokens earned to spend, as the server says.
+const EARN = { plugin: 'attentionfarm', key: 'earn' };
+const INITIAL_EARN = { available: false, earned: 0 };
 const FREE_MODEL_PATTERN = /^[a-z0-9._-]+\/[a-z0-9._-]+:free$/;
 const NO_TOKENS = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, steps: 0 };
 const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.3.14';
+const MOD_VERSION = '0.4.0';
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
@@ -59,6 +62,7 @@ const COPY = {
   unavailable: "login isn't available right now.",
   invalidEmail: 'enter a valid email.',
   backupUsedUp: "today's free requests are used up. they reset at midnight utc; switch back to claude meanwhile.",
+  backupUsedUpEarn: "today's free requests are used up. watch ad, get tokens to keep going, or switch back to claude.",
   backupRejected: "the free model couldn't take this request. try again, or switch back to claude.",
   freeToolAsk: 'the free model (through attentionfarm) asked for this. check it before allowing.',
   backupUnavailable: "free backup isn't available right now.",
@@ -195,6 +199,54 @@ async function request($, method, path, { body, token } = {}) {
   } finally {
     deadline?.cancel();
   }
+}
+
+async function sessionToken($) {
+  const { service } = await target($);
+  return keychainToken($, service).catch(() => undefined);
+}
+
+// What the server said about earning, kept for the band. `enabled`: earning exists at all; `available`: an ad
+// can be watched now; `message`: why not, when a limit is reached; `earned`: tokens earned and not yet spent.
+// From /ad/status and an ad's start (the whole picture), its finish (a limit it met), the backup key and each
+// paid reply (the balance alone).
+const SAFE_COPY = /^[a-z0-9 .,']{1,120}$/;
+const LIMITS = new Set(['daily_limit', 'account_limit']);
+async function rememberEarn($, data = {}) {
+  const { value: current = INITIAL_EARN } = await $.state.get(EARN);
+  const next = { ...current };
+  const message = typeof data.message === 'string' && SAFE_COPY.test(data.message) ? data.message : undefined;
+  if (typeof data.available === 'boolean') {
+    next.enabled = data.available || LIMITS.has(data.reason);
+    next.available = data.available;
+    next.message = data.available ? undefined : message;
+  } else if (LIMITS.has(data.reason)) {
+    next.available = false;
+    next.message = message;
+  }
+  if (data.earn_available === true) next.enabled = true;
+  if (Number.isInteger(data.earned_tokens) && data.earned_tokens >= 0) next.earned = data.earned_tokens;
+  if (Number.isInteger(data.tokens_per_ad) && data.tokens_per_ad > 0) next.tokensPerAd = data.tokens_per_ad;
+  if (Number.isInteger(data.ads_left_today) && data.ads_left_today >= 0) next.adsLeft = data.ads_left_today;
+  await $.state.set(EARN, defined(next));
+}
+
+async function loadEarn($, token) {
+  const result = await request($, 'GET', '/ad/status', { token });
+  if (result.status === 200) await rememberEarn($, result.data);
+}
+
+// The surface the band was last drawn on: where a command's ad plays.
+let lastSurface = 'terminal';
+
+async function watchAd($, surface = lastSurface) {
+  if (!(await sessionToken($))) {
+    await openFlow($, 'signup', 'band');
+    return { text: 'sign up first: tokens are earned to your account.' };
+  }
+  const played = await playAd($, surface);
+  if (!adPlaying() && played?.text) $.ui.toast(played.text);
+  return played;
 }
 
 function errorCopy(result) {
@@ -492,6 +544,7 @@ async function mintBackupKey($) {
   }
   backupKey = key;
   await rememberModels($, result.data).catch(() => {});
+  await rememberEarn($, result.data).catch(() => {});
   const picked = await pickedModel($).catch(() => undefined);
   return {
     label: picked?.label || (typeof result.data?.model?.label === 'string' ? result.data.model.label.toLowerCase().slice(0, 40) : 'a free model'),
@@ -654,12 +707,17 @@ async function askFreeModel($, e) {
     try { data = JSON.parse(response.text) || {}; } catch {}
     // A key that ended (a new one elsewhere, a logout) is replaced once.
     if (response.status === 401 && attempt === 0) { backupKey = undefined; continue; }
-    if (response.status === 429 && /used up/.test(data?.error?.message || '')) return { note: COPY.backupUsedUp };
+    if (response.status === 429 && /used up/.test(data?.error?.message || '')) {
+      const { value: earn = INITIAL_EARN } = await $.state.get(EARN);
+      return { note: earn.enabled ? COPY.backupUsedUpEarn : COPY.backupUsedUp };
+    }
     if (response.status !== 200) {
       return { note: response.status === 400 ? COPY.backupRejected : response.status === 503 ? COPY.backupUnavailable : COPY.backupBusy };
     }
     // Which free model of attentionfarm's roster answered.
     const label = String(response.headers?.['x-attentionfarm-model-label'] || '').toLowerCase().slice(0, 40) || undefined;
+    const left = Number.parseInt(response.headers?.['x-attentionfarm-earned-tokens'] ?? '', 10);
+    if (Number.isInteger(left) && left >= 0) await rememberEarn($, { earned_tokens: left }).catch(() => {});
     return { data, label };
   }
   return { note: COPY.backupUnavailable };
@@ -750,6 +808,7 @@ async function restore($) {
   if (result.status === 200 && typeof email === 'string' && email.includes('@')) {
     await $.state.set(ACCOUNT, { status: 'in', masked: maskEmail(email) });
     await loadModels($, token).catch(() => {});
+    await loadEarn($, token).catch(() => {});
   } else if (result.status === 401) {
     await keychainForget($, service);
     await $.state.set(ACCOUNT, { status: 'out' });
@@ -884,19 +943,40 @@ function tokenCount(Box, Text, used, rest = '') {
   ] });
 }
 
+// Tokens earned from ads, still to spend: the same look as the free-token count.
+function earnedCount(Box, Text, earned) {
+  return Box({ key: 'attentionfarm-earned', flexDirection: 'row', flexShrink: 0, children: [
+    line(Text, formatTokens(earned), { bold: true }),
+    line(Text, ' earned', { dimColor: true }),
+  ] });
+}
+
+// The way to earn: one button, and what an ad is worth beside it; or, when ads are done for now, why.
+function watchRow($, Box, Text, Button, earn, surface, label = 'watch ad, get tokens') {
+  if (!earn.available) return earn.message ? line(Text, earn.message, { dimColor: true, wrap: 'truncate-end' }) : undefined;
+  return Box({ flexDirection: 'row', alignItems: 'center', columnGap: 1, children: [
+    Button({ key: 'attentionfarm-watch', plain: true, onPress: () => watchAd($, surface), children: [Text({ bold: true, children: [label] })] }),
+    line(Text, `${formatTokens(earn.tokensPerAd || 1_000_000)} tokens for 15 seconds`, { dimColor: true, wrap: 'truncate-end' }),
+  ] });
+}
+
 // Free backup in the band: the offer after a limit stop, then which model is answering and the way back.
-function backupRows($, Box, Text, Button, account, backup, used, picker, pickedLabel) {
+function backupRows($, Box, Text, Button, account, backup, used, picker, pickedLabel, earn = INITIAL_EARN, surface = 'terminal') {
   if (backup.status === 'switching') return [line(Text, 'switching to free backup…', { dimColor: true })];
   if (backup.status === 'on') {
     const left = Number.isInteger(backup.remaining) ? ` · ${backup.remaining} left today` : '';
+    // The day's free requests used up: earned tokens carry on, and the way to earn more sits right here.
+    const usedUp = backup.note === COPY.backupUsedUpEarn || backup.remaining === 0;
+    const offer = earn.enabled && usedUp ? watchRow($, Box, Text, Button, earn, surface, 'watch ad, get more') : undefined;
     // The picker names the model; the line adds one only when a different model answered (the pick was busy).
     const via = !picker ? ` · ${backup.label || 'a free model'}` : backup.label && backup.label !== pickedLabel ? ` · via ${backup.label}` : '';
     return [
       Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: [
         tokenCount(Box, Text, used, `${left}${via}`),
+        ...(earn.earned > 0 ? [earnedCount(Box, Text, earn.earned)] : []),
         ...(picker ? [Box({ flexGrow: 1 }), Box({ key: 'attentionfarm-model-slot', flexShrink: 0, children: [picker] })] : []),
       ] }),
-      ...(backup.note ? [line(Text, backup.note, { dimColor: true, wrap: 'truncate-end' })] : []),
+      ...(offer ? [offer] : backup.note ? [line(Text, backup.note, { dimColor: true, wrap: 'truncate-end' })] : []),
     ];
   }
   if (backup.status !== 'offer') return undefined;
@@ -980,7 +1060,7 @@ function modelPicker($, ui, models, picked) {
 }
 
 // The resting band: two lines, the wordmark and one action, then the honest line.
-function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup = false, pose = switchTarget(backup), free = { models: [] }) {
+function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup = false, pose = switchTarget(backup), free = { models: [] }, earn = INITIAL_EARN) {
   const ui = $.ui.resolve(e);
   const { Box, Text, Button } = ui;
   const canLogin = LOGIN_SURFACES.has(e.surface) && account.status !== 'unsupported';
@@ -1007,7 +1087,7 @@ function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup 
         line(Text, account.flash === 'new' ? "you're in." : 'welcome back.', { bold: true }),
         line(Text, account.flash === 'new' ? 'your account is ready.' : 'good to see you again.', { dimColor: true, wrap: 'truncate-end' }),
       ] })
-      : line(Text, 'watch an ad, get tokens for claude code.', { dimColor: true, wrap: 'truncate-end' });
+      : (canBackup && earn.enabled && watchRow($, Box, Text, Button, earn, e.surface)) || line(Text, 'watch an ad, get tokens for claude code.', { dimColor: true, wrap: 'truncate-end' });
   } else {
     if (canLogin && account.status === 'out') {
       top.push(Button({ key: 'attentionfarm-signup', variant: 'secondary', label: 'sign up or log in', onPress: () => openFlow($, 'signup', 'band') }));
@@ -1018,28 +1098,261 @@ function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup 
       line(Text, 'for claude code. one email code, no password.', { dimColor: true, wrap: 'truncate-end' }),
     ] });
   }
-  // After backup, the session's free tokens stay in view at the end of the band's second line.
-  if (used > 0) {
+  // After backup, the session's free tokens stay in view at the end of the band's second line, and so do
+  // tokens earned from ads and not yet spent.
+  const earnedLeft = loggedIn && earn.earned > 0;
+  if (used > 0 || earnedLeft) {
     second = Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: [
       Box({ flexShrink: 1, children: [second] }),
       Box({ flexGrow: 1 }),
-      tokenCount(Box, Text, used),
+      ...(used > 0 ? [tokenCount(Box, Text, used)] : []),
+      ...(earnedLeft ? [earnedCount(Box, Text, earn.earned)] : []),
     ] });
   }
   // The picker sits at the right end of the second line, under the email, only while on free tokens: on claude
   // there is no free model to choose.
   const picker = loggedIn && canBackup && backup.status === 'on' ? modelPicker($, ui, free.models, free.picked) : undefined;
   const pickedLabel = (free.picked || free.models[0])?.label;
-  const rows = backupRows($, Box, Text, Button, account, backup, used, picker, pickedLabel) || [second];
+  const rows = backupRows($, Box, Text, Button, account, backup, used, picker, pickedLabel, earn, e.surface) || [second];
   return frame(Box, [Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: top }), ...rows], e.surface);
 }
 
-const USAGE = 'use /attentionfarm signup, login, account, logout or free, or /attentionfarm ticker on, off, pause or resume.';
+// --- watch ad, get tokens ---------------------------------------------------
+
+// The 15 second house ad, played in the place attentionfarm gave this account (the side pane or the band above
+// the text box). It cannot be stopped. While it plays the chat is frosted (each character drawn as ░, its shape
+// kept), the band counts down, and anything sent waits for the end: in its own hook when little of the ad is
+// left, otherwise turned away and sent again once it ends. At the end the server is told, and pays the tokens
+// only if its own clock saw the 15 seconds pass. What it is told: the view, whether it played to the end, the
+// seconds, the surface, and how many messages waited (a count, never their text).
+
+// The ad's two calls to attentionfarm, on the person's session.
+async function adServer($, path, body) {
+  const token = await sessionToken($);
+  return token ? request($, 'POST', path, { token, body }) : { status: 401, data: {} };
+}
+
+const AD_PANE_ID = 'attentionfarm-ad';
+const AD_FPS = 12;
+const AD_FRAMES = 180;
+const AD_SECONDS = AD_FRAMES / AD_FPS;
+// Claude's own drawing, its text frosted.
+const FROSTED_TEXT = new Set(['UserMessage', 'AssistantMessage']);
+// One frosted line of the ad's own: these carry structured props, not a text to frost.
+const FROSTED_ROW = new Set(['ToolUse', 'ToolResult', 'ToolGroup', 'ToolProgress', 'CommandOutput', 'Spinner', 'TurnDuration', 'InfoNotice']);
+// A hook has about ten seconds of its own: a prompt sent with this much or less of the ad left waits in place.
+const HOLD_IN_PLACE_SECONDS = 8;
+const AD_AUDIO = 'assets/ad/house-ad.m4a';
+
+const adFramePath = (root, i) => `${root}/assets/ad/f${String(i).padStart(3, '0')}.png`;
+// Every letter, digit and mark becomes ░; spaces and line breaks stay, so the text keeps its shape.
+const frostText = text => String(text ?? '').replace(/\S/gu, '░');
+
+const adPlaying = () => adIsPlaying;
+
+let adIsPlaying = false;
+let adFrame = 0;
+let adStartedAt = 0;
+let adTimer;
+let adSound;
+let adGeneration = 0;
+let adView;
+let adPlacement = 'pane';
+let adSurface = '';
+let adBandSite = '';
+let adHeld = 0;
+let adDesktopFrames;
+let adWaiting = [];
+const adReleases = new Set();
+
+const adSecondsLeft = () => Math.max(1, Math.ceil(AD_SECONDS - adFrame / AD_FPS));
+
+async function loadAdDesktopFrames($) {
+  if (adDesktopFrames) return adDesktopFrames;
+  const out = [];
+  for (let i = 0; i < AD_FRAMES; i += 1) out.push((await $.fs.read(adFramePath($.plugin.root, i), { as: 'bytes' })).base64);
+  adDesktopFrames = out;
+  return out;
+}
+
+function stopAdPlayback($) {
+  adGeneration += 1;
+  adTimer?.cancel(); adTimer = undefined;
+  adSound?.abort(); adSound = undefined;
+  adIsPlaying = false;
+  for (const release of adReleases) release();
+  adReleases.clear();
+  $.ui.invalidate('ui.render');
+}
+
+async function sendAdWaiting($) {
+  while (!adIsPlaying && adWaiting.length) {
+    const text = adWaiting.shift();
+    try { await $.prompt.submit({ text, asUser: true }); } catch { adWaiting.unshift(text); break; }
+  }
+}
+
+async function reportAd($, completed) {
+  const body = { view_id: adView, completed, seconds_watched: completed ? AD_SECONDS : Math.round(adFrame / AD_FPS * 10) / 10, held_messages: adHeld, surface: adSurface };
+  adView = undefined;
+  return adServer($, '/ad/finish', body).catch(() => ({ status: 0, data: {} }));
+}
+
+async function endAd($) {
+  if (!adIsPlaying) return;
+  adFrame = AD_FRAMES - 1;
+  stopAdPlayback($);
+  const result = await reportAd($, true);
+  if (result.status === 200) {
+    await rememberEarn($, result.data);
+    const data = result.data || {};
+    $.ui.toast(data.earned > 0 ? `+${formatTokens(data.earned)} tokens. ${formatTokens(data.earned_tokens ?? data.earned)} earned to spend.` : (data.message || "this ad didn't earn tokens."));
+  } else {
+    $.ui.toast("couldn't reach attentionfarm to count this ad.");
+  }
+  if (adPlacement === 'pane') await $.ui.close({ id: AD_PANE_ID }).catch(() => {});
+  void sendAdWaiting($);
+}
+
+async function playAd($, from) {
+  if (adIsPlaying) return { text: `the ad is already playing: ${adSecondsLeft()}s left.` };
+  const started = await adServer($, '/ad/start', { surface: from });
+  if (started.status !== 200) return { text: started.status === 0 ? "couldn't reach attentionfarm." : "watching ads for tokens isn't available right now." };
+  const data = started.data || {};
+  await rememberEarn($, data);
+  if (!data.available || !data.view_id) return { text: data.message || "watching ads for tokens isn't available right now." };
+  adGeneration += 1;
+  const adMine = adGeneration;
+  adView = data.view_id;
+  adPlacement = data.placement === 'band' ? 'band' : 'pane';
+  adSurface = from;
+  adHeld = 0;
+  if (adPlacement === 'pane') await $.ui.open({ id: AD_PANE_ID, title: 'attentionfarm' }).catch(() => {});
+  if (adSurface !== 'terminal') { try { await loadAdDesktopFrames($); } catch {} }
+  if (adMine !== adGeneration) return { text: 'the ad could not start.' };
+  adIsPlaying = true; adFrame = 0;
+  adStartedAt = await $.clock.now();
+  adSound = new AbortController();
+  $.audio.play({ asset: AD_AUDIO }, { signal: adSound.signal }).catch(() => {});
+  $.ui.invalidate('ui.render');
+  adTimer = $.clock.every(1000 / AD_FPS, async () => {
+    if (adMine !== adGeneration) return;
+    const elapsed = (await $.clock.now()) - adStartedAt;
+    if (elapsed >= AD_SECONDS * 1000) { await endAd($); return; }
+    const next = Math.min(AD_FRAMES - 1, Math.floor(elapsed * AD_FPS / 1000));
+    if (next === adFrame) return;
+    const second = Math.floor(adFrame / AD_FPS) !== Math.floor(next / AD_FPS);
+    adFrame = next;
+    // The pane cannot be put away while the ad plays: closed, it opens again within the second.
+    if (second && adPlacement === 'pane') {
+      const panes = await $.ui.panes().catch(() => []);
+      if (adMine === adGeneration && !panes.some(pane => pane.id === AD_PANE_ID)) await $.ui.open({ id: AD_PANE_ID, title: 'attentionfarm' }).catch(() => {});
+    }
+    if (adMine !== adGeneration) return;
+    if (adSurface !== 'terminal') { $.ui.invalidate('ui.render'); return; }
+    // Terminal: swap the Image in place; redraw only when the countdown's second changes or a swap is refused.
+    const swapped = await $.ui.blit({ requestId: adPlacement === 'pane' ? AD_PANE_ID : adBandSite, key: 'attentionfarm-ad', source: { file: adFramePath($.plugin.root, adFrame), format: 'png' } }).catch(() => ({ deny: 'threw' }));
+    if (adMine !== adGeneration) return;
+    if (second || swapped.deny) $.ui.invalidate('ui.render');
+  });
+  return { text: `playing a 15 second ad${adPlacement === 'band' ? ' above the text box' : ' in the side panel'}. the chat is back when it ends.` };
+}
+
+function adPicture(ui, e, room) {
+  const { Text } = ui;
+  if (e.surface === 'terminal' && ui.Image) {
+    const rows = Math.max(6, Math.min(room.rows, Math.round(room.columns * 9 / 32)));
+    const columns = Math.min(room.columns, Math.round(rows * 32 / 9));
+    return ui.Image({ key: 'attentionfarm-ad', columns, rows, source: { file: adFramePath(room.root, adFrame), format: 'png' }, alt: 'attentionfarm ad (this terminal cannot show pictures; it still counts down)' });
+  }
+  if (ui.Svg) {
+    const png = adDesktopFrames?.[adFrame];
+    const size = room.height ? { width: Math.round(room.height * 16 / 9), height: room.height } : {};
+    return png
+      ? ui.Svg({ alt: 'attentionfarm ad', ...size, source: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360"${room.height ? '' : ' width="640" height="360"'}><image width="640" height="360" href="data:image/png;base64,${png}"/></svg>` })
+      : Text({ dimColor: true, children: ['loading the ad…'] });
+  }
+  return Text({ dimColor: true, children: ['an ad is playing.'] });
+}
+
+const adCountdown = () => `ad · ${adSecondsLeft()}s · the chat is back when it ends${adWaiting.length ? ` · ${adWaiting.length} message${adWaiting.length === 1 ? '' : 's'} waiting` : ''}`;
+
+
+function renderAdBand($, e) {
+  const ui = $.ui.resolve(e);
+  const { Box, Text } = ui;
+  if (adPlacement !== 'band') return Text({ dimColor: true, children: [adCountdown()] });
+  adSurface = e.surface;
+  adBandSite = e.requestId || adBandSite;
+  const rows = Math.max(4, (e.props?.maxRows ?? 12) - 1);
+  return Box({ flexDirection: 'column', alignItems: 'center', children: [
+    adPicture(ui, e, { root: $.plugin.root, columns: e.props?.bodyColumns ?? 80, rows, height: Math.min(rows * 20, 720) }),
+    Text({ dimColor: true, children: [adCountdown()] }),
+  ] });
+}
+
+// A session that ends mid-ad: the view is reported as left, never as watched. Called from the mod's own
+// session.end hook (a plugin registers that event once).
+function endAdSession($) {
+  if (!adIsPlaying) return;
+  stopAdPlayback($);
+  adWaiting = [];
+  void reportAd($, false);
+}
+
+function registerAd(on) {
+  on('ui.render', { component: 'Pane', requestId: AD_PANE_ID }, async ($, e) => {
+    const ui = $.ui.resolve(e);
+    const { Box, Text } = ui;
+    adSurface = e.surface;
+    const columns = Math.max(20, Math.min(120, e.props?.bodyColumns ?? 64));
+    return Box({ flexDirection: 'column', rowGap: 1, children: [
+      adIsPlaying ? adPicture(ui, e, { root: $.plugin.root, columns, rows: Math.round(columns * 9 / 32) }) : Text({ dimColor: true, children: ['watch ad, get tokens: /attentionfarm ad'] }),
+      Text({ dimColor: true, children: [adIsPlaying ? `ad · ${adSecondsLeft()}s` : 'the ad has ended.'] }),
+    ] });
+  });
+
+  // The chat, frosted while the ad plays.
+  on('ui.render', async ($, e, next) => {
+    if (!adIsPlaying) return next(e);
+    if (FROSTED_TEXT.has(e.component)) return next({ ...e, props: { ...e.props, text: frostText(e.props?.text) } });
+    if (FROSTED_ROW.has(e.component)) {
+      const { Text } = $.ui.resolve(e);
+      return Text({ dimColor: true, children: ['░'.repeat(8 + (String(e.props?.tool ?? e.component).length % 9) * 3)] });
+    }
+    return next(e);
+  });
+
+  // What is sent during the ad waits for its end.
+  on('prompt.submit', async ($, e, next) => {
+    if (!adIsPlaying || !['composer', 'bridge'].includes(e.origin?.kind)) return next(e);
+    adHeld += 1;
+    if (AD_SECONDS - adFrame / AD_FPS <= HOLD_IN_PLACE_SECONDS) {
+      await new Promise(resolve => {
+        adReleases.add(resolve);
+        next.signal?.addEventListener('abort', () => { adReleases.delete(resolve); resolve(); }, { once: true });
+      });
+      if (next.signal?.aborted) return { drop: 'not sent while the ad played; send it again.' };
+      return next(e);
+    }
+    if (e.attachments?.length || e.context?.length) return { drop: `the ad ends in ${adSecondsLeft()}s. send it again then.` };
+    adWaiting.push(e.text);
+    $.ui.invalidate('ui.render');
+    return { drop: `held until the ad ends (${adSecondsLeft()}s); it sends itself then.` };
+  });
+
+}
+
+
+const USAGE = 'use /attentionfarm signup, login, account, logout, free or ad, or /attentionfarm ticker on, off, pause or resume.';
 
 export function register(on) {
+  // The ad's own hooks: its pane, the frosted chat, prompts waiting for its end, and a view left mid-ad.
+  registerAd(on);
+
   on('session.start', async ($, e, next) => {
     const result = await next(e);
-    await $.command.register({ name: 'attentionfarm', description: 'sign up, log in, your account, free tokens, and the scrolling status line ticker.' });
+    await $.command.register({ name: 'attentionfarm', description: 'sign up, log in, your account, free tokens, watch ad to get tokens, and the scrolling status line ticker.' });
     interactive = e.isInteractive;
     await syncTicker($);
     // $.state outlives a reload; start every load from unknown so a stale answer is never trusted,
@@ -1102,6 +1415,7 @@ export function register(on) {
   });
 
   on('session.end', ($, e, next) => {
+    endAdSession($);
     stopTicker();
     flow.resendTimer?.cancel();
     $.ui.status(undefined);
@@ -1126,6 +1440,10 @@ export function register(on) {
       await switchToBackup($);
       const now = await backupState($);
       return { text: now.status === 'on' ? 'free tokens on. use back to claude in the band to switch back.' : 'free tokens could not start.' };
+    }
+    if (args === 'ad' || args === 'watch' || args === 'earn') {
+      if (!(await usableAccount($))) return { text: COPY.unsupported };
+      return (await watchAd($)) || { text: "watching ads for tokens isn't available right now." };
     }
     if (args === 'logout' || args === 'log out') {
       if (!(await usableAccount($))) return { text: COPY.unsupported };
@@ -1154,7 +1472,11 @@ export function register(on) {
     const { value: pickedId } = await $.state.get(FREE_MODEL);
     const free = { models, picked: models.find(model => model.id === pickedId) };
     const canBackup = LOGIN_SURFACES.has(e.surface);
+    // While the ad plays the band is the ad's: the ad itself, or its countdown.
+    if (adPlaying()) return Box({ flexDirection: 'column', children: [native, frame(Box, [renderAdBand($, e)], e.surface)] });
+    const { value: earn = INITIAL_EARN } = await $.state.get(EARN);
     if (LOGIN_SURFACES.has(e.surface)) {
+      lastSurface = e.surface;
       bandRequestId = e.requestId;
       if (account.status === 'unknown') ensureRestore($);
       const { value: pane = INITIAL_PANE } = await $.state.get(PANE);
@@ -1162,6 +1484,6 @@ export function register(on) {
         return Box({ flexDirection: 'column', children: [native, frame(Box, [renderFlow($, e, pane, account)], e.surface)] });
       }
     }
-    return Box({ flexDirection: 'column', children: [native, renderBand($, e, account, backup, used, canBackup, pose, free)] });
+    return Box({ flexDirection: 'column', children: [native, renderBand($, e, account, backup, used, canBackup, pose, free, earn)] });
   });
 }
