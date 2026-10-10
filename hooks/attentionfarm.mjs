@@ -14,7 +14,7 @@ const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.3.2';
+const MOD_VERSION = '0.3.3';
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
@@ -776,8 +776,6 @@ function backupRows($, Box, Text, Button, account, backup, used) {
       Box({ flexDirection: 'row', alignItems: 'center', columnGap: 1, children: [
         line(Text, 'free backup', { bold: true }),
         line(Text, `${backup.label || 'a free model'}${spent}${left}`, { dimColor: true, wrap: 'truncate-end' }),
-        Box({ flexGrow: 1 }),
-        Button({ key: 'attentionfarm-backup-off', plain: true, label: 'back to claude', onPress: () => switchBack($) }),
       ] }),
       ...(backup.note ? [line(Text, backup.note, { dimColor: true, wrap: 'truncate-end' })] : []),
     ];
@@ -804,6 +802,10 @@ function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup 
   const { Box, Text, Button } = $.ui.resolve(e);
   const canLogin = LOGIN_SURFACES.has(e.surface) && account.status !== 'unsupported';
   const top = [wordmark(Text), Box({ flexGrow: 1 })];
+  // One slot, two states: use free af tokens while on claude, back to claude while on free tokens.
+  if (backup.status === 'on') {
+    top.push(Button({ key: 'attentionfarm-backup-off', plain: true, label: 'back to claude', onPress: () => switchBack($) }));
+  }
   let second;
   if (account.status === 'in' || account.status === 'offline') {
     // Free tokens by choice, not only after a limit: one press switches.

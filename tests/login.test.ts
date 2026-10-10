@@ -185,7 +185,7 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(await view.find({ type: 'Text', text: "you're in." })).toBeUndefined();
   expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
   for (const request of sent) {
-    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.2');
+    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.3');
     expect(Object.keys(request.body ?? {}).every(key => ALLOWED_KEYS[request.path].includes(key))).toBe(true);
   }
   const after = view;
@@ -286,7 +286,7 @@ test('resend sends the same email again and says so', async ($, on) => {
 test('session start: restores from the keychain and confirms the session with the server', async ($, on) => {
   const live = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, live.clock);
-  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.2', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
+  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.3', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
   expect(await (await band($, 'terminal', 'live')).find({ type: 'Button', key: 'attentionfarm-account', text: MASKED })).toBeDefined();
 });
 
@@ -568,9 +568,15 @@ test('free tokens by choice: the band button and /attentionfarm free switch at o
   const { clock, submitted, engine } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, clock, 'desktop');
   const view = await band($, 'desktop');
+  const slot = async () => (JSON.stringify(await view.drawn()).match(/"key":"(attentionfarm-[a-z-]+)"/g) || []).map(k => k.slice(7, -1));
+  const before = await slot();
   await view.press({ key: 'attentionfarm-free' });
   expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-on' })).toBeUndefined();
   expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-off', text: 'back to claude' })).toBeDefined();
+  // back to claude sits exactly where use free af tokens was: same row, same place before the account.
+  const after = await slot();
+  expect(after.indexOf('attentionfarm-backup-off')).toBe(before.indexOf('attentionfarm-free'));
+  expect(after.indexOf('attentionfarm-account')).toBe(before.indexOf('attentionfarm-account'));
   expect(submitted).toEqual([]);
   expect(await $.command.run({ command: 'attentionfarm', args: 'free' })).toMatchObject({ text: 'free tokens are already on. use back to claude in the band to switch back.' });
   await step($);
