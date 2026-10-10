@@ -185,7 +185,7 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(await view.find({ type: 'Text', text: "you're in." })).toBeUndefined();
   expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
   for (const request of sent) {
-    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.9');
+    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.10');
     expect(Object.keys(request.body ?? {}).every(key => ALLOWED_KEYS[request.path].includes(key))).toBe(true);
   }
   const after = view;
@@ -286,7 +286,7 @@ test('resend sends the same email again and says so', async ($, on) => {
 test('session start: restores from the keychain and confirms the session with the server', async ($, on) => {
   const live = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, live.clock);
-  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.9', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
+  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.10', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
   expect(await (await band($, 'terminal', 'live')).find({ type: 'Button', key: 'attentionfarm-account', text: MASKED })).toBeDefined();
 });
 
@@ -618,8 +618,8 @@ test('the switch on desktop: one press moves the halves once, one way, and redra
   expect(await svg()).toMatchObject({ alt: 'on claude', width: 16, height: 16 });
   expect((await svg()).isInteractive).toBeUndefined();
   expect((await svg()).source).toContain('class="ink" d="M30 10 A22 22 0 0 0 30 54 Z" transform="translate(0 -5)"');
-  // The halves press too, through the blank Button laid over them.
-  await view.press({ key: 'attentionfarm-free-icon' });
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-free-icon' })).toBeUndefined();
+  await view.press({ key: 'attentionfarm-free' });
   await clock.advance(1_000);
   let poses = poseLog();
   // switching, then on, then the token count: one move from claude to free, never back and forth.
@@ -650,9 +650,9 @@ test('the switch in the terminal: half blocks show which side is up', async ($, 
   const view = await band($, 'terminal');
   expect(await view.find({ type: 'Svg' })).toBeUndefined();
   const button = async (key: string) => JSON.stringify(await view.find({ type: 'Button', key }));
-  expect(await button('attentionfarm-free')).toMatch(/use free af tokens .*▀.*▄/);
+  expect(await button('attentionfarm-free')).toMatch(/▀.*▄.* use free af tokens/);
   await view.press({ key: 'attentionfarm-free' });
-  expect(await button('attentionfarm-backup-off')).toMatch(/back to claude .*▄.*▀/);
+  expect(await button('attentionfarm-backup-off')).toMatch(/▄.*▀.* back to claude/);
 });
 
 test('free tokens by choice: no button while logged out', async ($, on) => {

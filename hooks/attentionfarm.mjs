@@ -15,7 +15,7 @@ const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.3.9';
+const MOD_VERSION = '0.3.10';
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
@@ -879,28 +879,25 @@ function glyphs(t) {
   return t < 0.34 ? ['▀', '▄'] : t > 0.66 ? ['▄', '▀'] : ['█', '█'];
 }
 
-// The label comes first and the halves last, beside the account: a label of another length grows to
-// the left and the halves stay where they are. The whole slot presses.
+// The halves first, then the label. The switch sits right after the wordmark, so the halves keep one
+// place and a label of another length grows to the right. Only the label presses: anything laid over the
+// picture to make it press gets a box of the desktop's own drawn behind it, and that box flickers with
+// every frame of the move.
 function exchangeButton(ui, surface, { key, label, pose: t, onPress }) {
   const { Box, Text, Button, Svg } = ui;
   // The terminal has no vector drawing (an Svg there draws nothing), so it gets the half blocks.
   if (Svg && surface !== 'terminal') {
-    // Drawn as an image, not in a frame: a frame reloads its document on every new source and blanks
-    // while it does; an image keeps its last picture until the next is ready, and still plays the move.
-    // The keyed boxes keep the same picture element across states. An Svg cannot sit in a Button, so a
-    // blank Button laid over the halves makes them press like the label beside them.
+    // Drawn as an image, not in a frame: a frame reloads its document on every new source and blanks while
+    // it does. The keyed boxes keep the same picture element from frame to frame and across states.
     return Box({ key: 'attentionfarm-switch', flexDirection: 'row', alignItems: 'center', columnGap: 1, children: [
-      Button({ key, plain: true, onPress, children: [Text({ children: [label] })] }),
       Box({ key: 'attentionfarm-switch-icon', flexDirection: 'row', alignItems: 'center', children: [
         Svg({ source: exchangeSvg(t), alt: t >= 0.5 ? 'on free af tokens' : 'on claude', width: 16, height: 16 }),
       ] }),
-      Box({ position: 'absolute', right: 0, top: 0, children: [
-        Button({ key: `${key}-icon`, plain: true, onPress, children: [Text({ children: [BLANK.repeat(2)] })] }),
-      ] }),
+      Button({ key, plain: true, onPress, children: [Text({ children: [label] })] }),
     ] });
   }
   const [ink, tide] = glyphs(t);
-  return Button({ key, plain: true, label, onPress, children: [Text({ children: [`${label} `, ink, Text({ color: TIDE, children: [tide] })] })] });
+  return Button({ key, plain: true, label, onPress, children: [Text({ children: [ink, Text({ color: TIDE, children: [tide] }), ` ${label}`] })] });
 }
 
 // The resting band: two lines, the wordmark and one action, then the honest line.
@@ -908,19 +905,20 @@ function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup 
   const ui = $.ui.resolve(e);
   const { Box, Text, Button } = ui;
   const canLogin = LOGIN_SURFACES.has(e.surface) && account.status !== 'unsupported';
-  const top = [wordmark($, ui, e.surface), Box({ flexGrow: 1 })];
-  // One slot, two states: use free af tokens while on claude, back to claude while on free tokens.
+  const top = [wordmark($, ui, e.surface)];
+  const loggedIn = account.status === 'in' || account.status === 'offline';
+  // One slot, three states, right after the wordmark: use free af tokens while on claude (free tokens by
+  // choice, not only after a limit), switching… mid-way, back to claude while on free tokens.
   if (backup.status === 'on') {
     top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-backup-off', label: 'back to claude', pose, onPress: () => switchBack($) }));
   } else if (backup.status === 'switching') {
     top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-switching', label: 'switching…', pose, onPress: () => {} }));
+  } else if (loggedIn && canBackup && backup.status === 'off') {
+    top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-free', label: 'use free af tokens', pose, onPress: () => switchToBackup($) }));
   }
+  top.push(Box({ flexGrow: 1 }));
   let second;
-  if (account.status === 'in' || account.status === 'offline') {
-    // Free tokens by choice, not only after a limit: one press switches.
-    if (canBackup && backup.status === 'off') {
-      top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-free', label: 'use free af tokens', pose, onPress: () => switchToBackup($) }));
-    }
+  if (loggedIn) {
     top.push(Button({
       key: 'attentionfarm-account', plain: true, dimColor: true,
       label: `${account.masked || 'your account'}${account.status === 'offline' ? ' · offline' : ''}`,
