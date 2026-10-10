@@ -14,7 +14,7 @@ const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.3.6';
+const MOD_VERSION = '0.3.7';
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
@@ -673,13 +673,8 @@ function line(Text, value, props = {}) {
   return Text({ ...props, children: [value] });
 }
 
-// The wordmark opens the website. A plain Button around the tide chip keeps the chip's look;
-// a Link would draw its own underline and colour over it.
-function wordmark($, Text, Button) {
-  return Button({
-    key: 'attentionfarm-site', plain: true, label: 'attentionfarm', onPress: () => openUrl($, SITE_URL, 'attentionfarm.com'),
-    children: [Text({ bold: true, backgroundColor: TIDE, color: TIDE_INK, children: [' attentionfarm '] })],
-  });
+function wordmark(Text) {
+  return Text({ bold: true, backgroundColor: TIDE, color: TIDE_INK, children: [' attentionfarm '] });
 }
 
 // Every attentionfarm band wears a tide outline. The desktop app draws its own padded card around
@@ -808,16 +803,22 @@ function backupRows($, Box, Text, Button, account, backup, used) {
 }
 
 // The exchange: two halves, ink for claude and tide for free af tokens. Whichever side is answering sits
-// up; mid-switch they line up into one circle. Offsets are in the 64-unit drawing.
-const POSES = { claude: [-5, 5], switching: [0, 0], free: [5, -5] };
-let lastPose;
+// up. A press slides them past each other in one motion; at its midpoint they line up into one circle.
+// Offsets are in the 64-unit drawing.
+const POSES = { claude: [-5, 5], free: [5, -5] };
+let pose;
+let poseFrom;
 
-// Desktop draws the real halves; a change of pose slides them there once, then the drawing stays still.
-function exchangeSvg(pose) {
-  const from = lastPose && lastPose !== pose ? POSES[lastPose] : undefined;
-  lastPose = pose;
+// Desktop draws the real halves. The source names the last move, from-to, so redraws repeat the same
+// markup and never restart it; only a new pose starts a new move.
+function exchangeSvg(next) {
+  if (pose !== next) {
+    poseFrom = pose;
+    pose = next;
+  }
+  const from = poseFrom && poseFrom !== pose ? POSES[poseFrom] : undefined;
   const half = (cls, d, dy, fromDy) => `<path class="${cls}" d="${d}" transform="translate(0 ${dy})">${fromDy === undefined ? ''
-    : `<animateTransform attributeName="transform" type="translate" from="0 ${fromDy}" to="0 ${dy}" dur="0.35s" fill="freeze" calcMode="spline" keyTimes="0;1" keySplines="0.3 0 0.2 1"/>`}</path>`;
+    : `<animateTransform attributeName="transform" type="translate" from="0 ${fromDy}" to="0 ${dy}" dur="0.5s" fill="freeze" calcMode="spline" keyTimes="0;1" keySplines="0.65 0 0.35 1"/>`}</path>`;
   const [ink, tide] = POSES[pose];
   return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
     + `<style>.ink{fill:#111111}.tide{fill:${TIDE}}@media (prefers-color-scheme: dark){.ink{fill:#F2F2F2}}</style>`
@@ -827,20 +828,21 @@ function exchangeSvg(pose) {
 }
 
 // The terminal draws the same idea in one row of text: a half block is a half up or down.
-const GLYPHS = { claude: ['▀', '▄'], switching: ['█', '█'], free: ['▄', '▀'] };
+const GLYPHS = { claude: ['▀', '▄'], free: ['▄', '▀'] };
 
-function exchangeButton(ui, surface, { key, label, pose, onPress }) {
+// The label comes first and the halves last, beside the account: a label of another length grows to
+// the left and the halves stay where they are.
+function exchangeButton(ui, surface, { key, label, pose: next, onPress }) {
   const { Box, Text, Button, Svg } = ui;
   // The terminal has no vector drawing (an Svg there draws nothing), so it gets the half blocks.
   if (Svg && surface !== 'terminal') {
-    lastPose ??= pose;
     return Box({ flexDirection: 'row', alignItems: 'center', columnGap: 1, children: [
-      Svg({ source: exchangeSvg(pose), alt: pose === 'free' ? 'on free af tokens' : pose === 'switching' ? 'switching' : 'on claude', width: 16, height: 16, isInteractive: true }),
       Button({ key, plain: true, label, onPress }),
+      Svg({ source: exchangeSvg(next), alt: next === 'free' ? 'on free af tokens' : 'on claude', width: 16, height: 16, isInteractive: true }),
     ] });
   }
-  const [ink, tide] = GLYPHS[pose];
-  return Button({ key, plain: true, label, onPress, children: [Text({ children: [ink, Text({ color: TIDE, children: [tide] }), ` ${label}`] })] });
+  const [ink, tide] = GLYPHS[next];
+  return Button({ key, plain: true, label, onPress, children: [Text({ children: [`${label} `, ink, Text({ color: TIDE, children: [tide] })] })] });
 }
 
 // The resting band: two lines, the wordmark and one action, then the honest line.
@@ -848,12 +850,12 @@ function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup 
   const ui = $.ui.resolve(e);
   const { Box, Text, Button } = ui;
   const canLogin = LOGIN_SURFACES.has(e.surface) && account.status !== 'unsupported';
-  const top = [wordmark($, Text, Button), Box({ flexGrow: 1 })];
+  const top = [wordmark(Text), Box({ flexGrow: 1 })];
   // One slot, two states: use free af tokens while on claude, back to claude while on free tokens.
   if (backup.status === 'on') {
     top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-backup-off', label: 'back to claude', pose: 'free', onPress: () => switchBack($) }));
   } else if (backup.status === 'switching') {
-    top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-switching', label: 'switching…', pose: 'switching', onPress: () => {} }));
+    top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-switching', label: 'switching…', pose: 'free', onPress: () => {} }));
   }
   let second;
   if (account.status === 'in' || account.status === 'offline') {

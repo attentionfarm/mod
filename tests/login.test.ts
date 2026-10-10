@@ -185,7 +185,7 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(await view.find({ type: 'Text', text: "you're in." })).toBeUndefined();
   expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
   for (const request of sent) {
-    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.6');
+    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.7');
     expect(Object.keys(request.body ?? {}).every(key => ALLOWED_KEYS[request.path].includes(key))).toBe(true);
   }
   const after = view;
@@ -286,7 +286,7 @@ test('resend sends the same email again and says so', async ($, on) => {
 test('session start: restores from the keychain and confirms the session with the server', async ($, on) => {
   const live = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, live.clock);
-  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.6', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
+  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.7', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
   expect(await (await band($, 'terminal', 'live')).find({ type: 'Button', key: 'attentionfarm-account', text: MASKED })).toBeDefined();
 });
 
@@ -599,14 +599,12 @@ test('free tokens by choice: a service that cannot start says so in a toast and 
 });
 
 for (const surface of SURFACES) {
-  test(`the attentionfarm wordmark opens the website on ${surface}, keeping the tide chip`, async ($, on) => {
-    const { clock, runs } = world(on);
+  test(`the attentionfarm wordmark keeps its tide chip on ${surface}`, async ($, on) => {
+    const { clock } = world(on);
     await start($, clock, surface);
     const view = await band($, surface);
-    expect(await view.find({ type: 'Link' })).toBeUndefined();
+    expect(await view.find({ type: 'Button', key: 'attentionfarm-site' })).toBeUndefined();
     expect((await view.find({ type: 'Text', text: ' attentionfarm ' }))?.props).toMatchObject({ backgroundColor: '#2EC4B6', color: '#03211F' });
-    await view.press({ key: 'attentionfarm-site' });
-    expect(runs.at(-1)?.argv).toEqual(['open', 'https://attentionfarm.com']);
   });
 }
 
@@ -621,9 +619,14 @@ test('the switch on desktop: the exchange halves trade places, sliding once per 
   const free = await svg();
   expect(free.alt).toBe('on free af tokens');
   expect(free.source).toContain('transform="translate(0 5)"');
-  expect(free.source).toContain('<animateTransform');
+  expect(free.source).toContain('from="0 -5" to="0 5"');
+  // A redraw repeats the same markup, so the move is never restarted.
+  await step($);
+  expect((await svg()).source).toBe(free.source);
   await view.press({ key: 'attentionfarm-backup-off' });
-  expect((await svg()).alt).toBe('on claude');
+  const back = await svg();
+  expect(back.alt).toBe('on claude');
+  expect(back.source).toContain('from="0 5" to="0 -5"');
 });
 
 test('the switch in the terminal: half blocks show which side is up', async ($, on) => {
@@ -632,9 +635,9 @@ test('the switch in the terminal: half blocks show which side is up', async ($, 
   const view = await band($, 'terminal');
   expect(await view.find({ type: 'Svg' })).toBeUndefined();
   const button = async (key: string) => JSON.stringify(await view.find({ type: 'Button', key }));
-  expect(await button('attentionfarm-free')).toMatch(/▀.*▄.* use free af tokens/);
+  expect(await button('attentionfarm-free')).toMatch(/use free af tokens .*▀.*▄/);
   await view.press({ key: 'attentionfarm-free' });
-  expect(await button('attentionfarm-backup-off')).toMatch(/▄.*▀.* back to claude/);
+  expect(await button('attentionfarm-backup-off')).toMatch(/back to claude .*▄.*▀/);
 });
 
 test('free tokens by choice: no button while logged out', async ($, on) => {
