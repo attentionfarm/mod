@@ -34,7 +34,7 @@ a two-line band appears above the prompt: the **attentionfarm** wordmark and **s
 
 ## log in or sign up
 
-click **sign up** (or run `/attentionfarm signup`), type your email and press enter, then type or paste the 6-digit code from the email. that's it. returning users click **log in**; it is the same flow. `/attentionfarm account` shows your account, log out, log out everywhere and delete account; `/attentionfarm logout` logs out, even offline.
+click **sign up** (or run `/attentionfarm signup`), type your email and press enter, then type or paste the 6-digit code from the email. that's it. returning users click **log in**; it is the same flow. `/attentionfarm account` shows your account, log out and delete account; `/attentionfarm logout` logs out, even offline.
 
 login works in the claude code terminal on macos. your session key is kept in your macos login keychain (item `attentionfarm-mod`) and removed when you log out. your email and code are typed into the mod's own fields, never into the prompt, so they do not reach the conversation. privacy: https://attentionfarm.com/privacy
 

@@ -185,7 +185,7 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(await view.find({ type: 'Text', text: "you're in." })).toBeUndefined();
   expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
   for (const request of sent) {
-    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.1');
+    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.2');
     expect(Object.keys(request.body ?? {}).every(key => ALLOWED_KEYS[request.path].includes(key))).toBe(true);
   }
   const after = view;
@@ -286,7 +286,7 @@ test('resend sends the same email again and says so', async ($, on) => {
 test('session start: restores from the keychain and confirms the session with the server', async ($, on) => {
   const live = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, live.clock);
-  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.1', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
+  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.2', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
   expect(await (await band($, 'terminal', 'live')).find({ type: 'Button', key: 'attentionfarm-account', text: MASKED })).toBeDefined();
 });
 
@@ -305,13 +305,15 @@ test('session start: offline keeps the session and says so', async ($, on) => {
   expect(await (await band($, 'terminal', 'away')).find({ type: 'Button', text: `${MASKED} · offline` })).toBeDefined();
 });
 
-test('account pane: log out, log out everywhere, and delete', async ($, on) => {
+test('account pane: log out and delete, and no log out everywhere', async ($, on) => {
   const { clock, sent, toasts, keychain } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, clock);
   const view = await band($, 'terminal');
   await view.press({ key: 'attentionfarm-account' });
   expect((await view.find({ type: 'Text', text: MASKED }))?.props.bold).toBe(true);
   expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-logout' })).toBeDefined();
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-logout-all' })).toBeUndefined();
   await view.press({ key: 'attentionfarm-delete-account' });
   await view.input({ key: 'attentionfarm-delete', text: 'yes' });
   expect(await view.find({ type: 'Text', text: 'delete your account?' })).toBeDefined();
@@ -323,15 +325,15 @@ test('account pane: log out, log out everywhere, and delete', async ($, on) => {
   expect(await view.find({ type: 'Button', key: 'attentionfarm-signup' })).toBeDefined();
 });
 
-test('log out everywhere still logs out here when the server is unreachable', async ($, on) => {
+test('log out still logs out here when the server is unreachable', async ($, on) => {
   const second = world(on, { keychain: { token: TOKEN, comment: MASKED }, replies: { '/auth/logout': 'offline' } });
   await start($, second.clock);
   expect(await $.command.run({ command: 'attentionfarm', args: 'account' })).toMatchObject({ text: 'opened.' });
   const view = await pane($);
-  await view.press({ key: 'attentionfarm-logout-all' });
-  expect(second.sent.at(-1)).toMatchObject({ path: '/auth/logout', body: { all: true } });
+  await view.press({ key: 'attentionfarm-logout' });
+  expect(second.sent.at(-1)).toMatchObject({ path: '/auth/logout', method: 'POST' });
   expect(second.keychain()).toBeUndefined();
-  expect(second.toasts.at(-1)).toBe("logged out here. couldn't reach attentionfarm to end your other devices.");
+  expect(second.toasts.at(-1)).toBe('logged out of attentionfarm.');
 });
 
 test('log out ends this session on the server', async ($, on) => {
@@ -574,7 +576,7 @@ test('free tokens by choice: the band button and /attentionfarm free switch at o
   await step($);
   expect(engine.steps).toBe(0);
   await view.press({ key: 'attentionfarm-backup-off' });
-  expect(await view.find({ type: 'Button', key: 'attentionfarm-free', text: 'use free tokens' })).toBeDefined();
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-free', text: 'use free af tokens' })).toBeDefined();
   expect(await $.command.run({ command: 'attentionfarm', args: 'free' })).toMatchObject({ text: 'free tokens on. use back to claude in the band to switch back.' });
   expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-off' })).toBeDefined();
 });
@@ -586,7 +588,7 @@ test('free tokens by choice: a service that cannot start says so in a toast and 
   await view.press({ key: 'attentionfarm-free' });
   expect(toasts).toContain("free backup isn't available right now.");
   expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-on' })).toBeUndefined();
-  expect(await view.find({ type: 'Button', key: 'attentionfarm-free', text: 'use free tokens' })).toBeDefined();
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-free', text: 'use free af tokens' })).toBeDefined();
   expect(await $.command.run({ command: 'attentionfarm', args: 'free' })).toMatchObject({ text: 'free tokens could not start.' });
 });
 

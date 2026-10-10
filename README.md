@@ -35,9 +35,9 @@ exit and restart with `claude` after updating.
 ## your account
 
 - `/attentionfarm signup` or `/attentionfarm login`: opens the sign-in pane. paste the code with or without spaces; it checks itself at 6 digits.
-- `/attentionfarm account`: your account, log out, log out everywhere, delete account.
+- `/attentionfarm account`: your account, log out, delete account.
 - `/attentionfarm logout`: logs this machine out, even offline.
-- `/attentionfarm free`: use free tokens now instead of your claude account.
+- `/attentionfarm free`: use free af tokens now instead of your claude account.
 
 login works in claude code on macos, in the terminal and in the desktop app.
 
@@ -51,7 +51,7 @@ delete account removes your account, sessions and backup keys immediately. see [
 
 ## free backup
 
-when claude stops at a usage limit, the band offers **continue free**. you can also switch any time, with no confirmation: press **use free tokens** in the band, or run `/attentionfarm free`. it works in the terminal and in the claude desktop app.
+when claude stops at a usage limit, the band offers **continue free**. you can also switch any time, with no confirmation: press **use free af tokens** in the band, or run `/attentionfarm free`. it works in the terminal and in the claude desktop app.
 
 - while it is on, the mod answers each model step itself: it sends the conversation, claude code's system prompt and the tool list to attentionfarm, which passes them to a free model on openrouter (nemotron 3 ultra to start). claude code sends nothing to anthropic for those steps, and your claude login is never used or shared.
 - every tool call the free model asks for is put to you before it runs, even in auto mode. a deny stays a deny.

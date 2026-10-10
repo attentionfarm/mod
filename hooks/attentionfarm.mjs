@@ -14,7 +14,7 @@ const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.3.1';
+const MOD_VERSION = '0.3.2';
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
@@ -391,18 +391,12 @@ async function signedOut($, toast) {
   $.ui.toast(toast);
 }
 
-async function logout($, { all = false } = {}) {
+async function logout($) {
   const { service } = await target($);
-  let reached = true;
   const token = await keychainToken($, service).catch(() => undefined);
-  if (token) {
-    const result = await request($, 'POST', '/auth/logout', all ? { token, body: { all: true } } : { token });
-    reached = result.status === 200 || result.status === 401;
-  }
+  if (token) await request($, 'POST', '/auth/logout', { token });
   // Local logout happens even when the server cannot be reached.
-  await signedOut($, !all ? 'logged out of attentionfarm.'
-    : reached ? 'logged out on every device.'
-    : "logged out here. couldn't reach attentionfarm to end your other devices.");
+  await signedOut($, 'logged out of attentionfarm.');
 }
 
 async function deleteAccount($, typed) {
@@ -764,7 +758,6 @@ function renderFlow($, e, pane, account) {
     if (status) lines.push(status);
     lines.push(controls(Box, [
       Button({ key: 'attentionfarm-logout', plain: true, label: 'log out', onPress: () => logout($) }),
-      Button({ key: 'attentionfarm-logout-all', plain: true, dimColor: true, label: 'log out everywhere', onPress: () => logout($, { all: true }) }),
       Box({ flexGrow: 1 }),
       Button({ key: 'attentionfarm-delete-account', plain: true, dimColor: true, label: 'delete account', onPress: async () => { await setPane($, { step: 'delete', error: undefined }); await focus($, 'attentionfarm-delete'); } }),
     ]));
@@ -815,7 +808,7 @@ function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup 
   if (account.status === 'in' || account.status === 'offline') {
     // Free tokens by choice, not only after a limit: one press switches.
     if (canBackup && backup.status === 'off') {
-      top.push(Button({ key: 'attentionfarm-free', plain: true, label: 'use free tokens', onPress: () => switchToBackup($) }));
+      top.push(Button({ key: 'attentionfarm-free', plain: true, label: 'use free af tokens', onPress: () => switchToBackup($) }));
     }
     top.push(Button({
       key: 'attentionfarm-account', plain: true, dimColor: true,
