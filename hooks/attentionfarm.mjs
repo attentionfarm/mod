@@ -14,7 +14,7 @@ const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.3.7';
+const MOD_VERSION = '0.3.8';
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
@@ -673,8 +673,23 @@ function line(Text, value, props = {}) {
   return Text({ ...props, children: [value] });
 }
 
-function wordmark(Text) {
-  return Text({ bold: true, backgroundColor: TIDE, color: TIDE_INK, children: [' attentionfarm '] });
+// A Button blank to the eye, laid over something drawn: the desktop paints a Button's text in its own
+// style, so a tide chip or a picture inside one would lose its look. Over it, the look stays and it presses.
+const BLANK = '\u2800';
+function overlay(ui, { key, width, onPress }) {
+  const { Box, Text, Button } = ui;
+  return Box({ position: 'absolute', left: 0, top: 0, children: [
+    Button({ key, plain: true, onPress, children: [Text({ children: [BLANK.repeat(width)] })] }),
+  ] });
+}
+
+// The wordmark: the tide chip, opening the website. The terminal keeps a Button's chip as drawn.
+function wordmark($, ui, surface) {
+  const { Box, Text, Button } = ui;
+  const chip = Text({ bold: true, backgroundColor: TIDE, color: TIDE_INK, children: [' attentionfarm '] });
+  const onPress = () => openUrl($, SITE_URL, 'attentionfarm.com');
+  if (surface === 'terminal') return Button({ key: 'attentionfarm-site', plain: true, onPress, children: [chip] });
+  return Box({ key: 'attentionfarm-wordmark', children: [chip, overlay(ui, { key: 'attentionfarm-site', width: 15, onPress })] });
 }
 
 // Every attentionfarm band wears a tide outline. The desktop app draws its own padded card around
@@ -831,14 +846,23 @@ function exchangeSvg(next) {
 const GLYPHS = { claude: ['▀', '▄'], free: ['▄', '▀'] };
 
 // The label comes first and the halves last, beside the account: a label of another length grows to
-// the left and the halves stay where they are.
+// the left and the halves stay where they are. The whole slot presses.
 function exchangeButton(ui, surface, { key, label, pose: next, onPress }) {
   const { Box, Text, Button, Svg } = ui;
   // The terminal has no vector drawing (an Svg there draws nothing), so it gets the half blocks.
   if (Svg && surface !== 'terminal') {
-    return Box({ flexDirection: 'row', alignItems: 'center', columnGap: 1, children: [
-      Button({ key, plain: true, label, onPress }),
-      Svg({ source: exchangeSvg(next), alt: next === 'free' ? 'on free af tokens' : 'on claude', width: 16, height: 16, isInteractive: true }),
+    // Drawn as an image, not in a frame: a frame reloads its document on every new source and blanks
+    // while it does; an image keeps its last picture until the next is ready, and still plays the move.
+    // The keyed boxes keep the same picture element across states. An Svg cannot sit in a Button, so a
+    // blank Button laid over the halves makes them press like the label beside them.
+    return Box({ key: 'attentionfarm-switch', flexDirection: 'row', alignItems: 'center', columnGap: 1, children: [
+      Button({ key, plain: true, onPress, children: [Text({ children: [label] })] }),
+      Box({ key: 'attentionfarm-switch-icon', flexDirection: 'row', alignItems: 'center', children: [
+        Svg({ source: exchangeSvg(next), alt: next === 'free' ? 'on free af tokens' : 'on claude', width: 16, height: 16 }),
+      ] }),
+      Box({ position: 'absolute', right: 0, top: 0, children: [
+        Button({ key: `${key}-icon`, plain: true, onPress, children: [Text({ children: [BLANK.repeat(2)] })] }),
+      ] }),
     ] });
   }
   const [ink, tide] = GLYPHS[next];
@@ -850,7 +874,7 @@ function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup 
   const ui = $.ui.resolve(e);
   const { Box, Text, Button } = ui;
   const canLogin = LOGIN_SURFACES.has(e.surface) && account.status !== 'unsupported';
-  const top = [wordmark(Text), Box({ flexGrow: 1 })];
+  const top = [wordmark($, ui, e.surface), Box({ flexGrow: 1 })];
   // One slot, two states: use free af tokens while on claude, back to claude while on free tokens.
   if (backup.status === 'on') {
     top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-backup-off', label: 'back to claude', pose: 'free', onPress: () => switchBack($) }));
