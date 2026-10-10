@@ -21,7 +21,7 @@ const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.3.13';
+const MOD_VERSION = '0.3.14';
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
@@ -876,18 +876,24 @@ function renderFlow($, e, pane, account) {
   return Box({ flexDirection: 'column', rowGap: e.surface === 'terminal' ? 0 : 1, children: lines });
 }
 
+// The session's free tokens: the number first and bold, the words quiet.
+function tokenCount(Box, Text, used, rest = '') {
+  return Box({ key: 'attentionfarm-tokens', flexDirection: 'row', flexShrink: 1, children: [
+    line(Text, formatTokens(used), { bold: true }),
+    line(Text, ` free tokens${rest}`, { dimColor: true, wrap: 'truncate-end' }),
+  ] });
+}
+
 // Free backup in the band: the offer after a limit stop, then which model is answering and the way back.
 function backupRows($, Box, Text, Button, account, backup, used, picker, pickedLabel) {
   if (backup.status === 'switching') return [line(Text, 'switching to free backup…', { dimColor: true })];
   if (backup.status === 'on') {
-    const spent = `${formatTokens(used)} tokens this session`;
-    const left = Number.isInteger(backup.remaining) ? ` · ${backup.remaining} requests left today` : '';
-    // With the picker beside it, the line names a model only when a different one answered (the pick was busy).
-    const who = !picker ? `${backup.label || 'a free model'} · ` : backup.label && backup.label !== pickedLabel ? `answered by ${backup.label} · ` : '';
+    const left = Number.isInteger(backup.remaining) ? ` · ${backup.remaining} left today` : '';
+    // The picker names the model; the line adds one only when a different model answered (the pick was busy).
+    const via = !picker ? ` · ${backup.label || 'a free model'}` : backup.label && backup.label !== pickedLabel ? ` · via ${backup.label}` : '';
     return [
-      Box({ flexDirection: 'row', alignItems: 'center', columnGap: 1, children: [
-        line(Text, 'free backup', { bold: true }),
-        Box({ flexShrink: 1, children: [line(Text, `${who}${spent}${left}`, { dimColor: true, wrap: 'truncate-end' })] }),
+      Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: [
+        tokenCount(Box, Text, used, `${left}${via}`),
         ...(picker ? [Box({ flexGrow: 1 }), Box({ key: 'attentionfarm-model-slot', flexShrink: 0, children: [picker] })] : []),
       ] }),
       ...(backup.note ? [line(Text, backup.note, { dimColor: true, wrap: 'truncate-end' })] : []),
@@ -966,7 +972,7 @@ function modelPicker($, ui, models, picked) {
   const { Select } = ui;
   if (!Select || !models.length) return undefined;
   return Select({
-    key: 'attentionfarm-model', label: 'model',
+    key: 'attentionfarm-model',
     options: models.map(model => ({ value: model.id, label: model.label })),
     value: (picked || models[0]).id,
     onSelect: value => pickModel($, value),
@@ -1017,18 +1023,12 @@ function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup 
     second = Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: [
       Box({ flexShrink: 1, children: [second] }),
       Box({ flexGrow: 1 }),
-      line(Text, `${formatTokens(used)} free tokens this session`, { dimColor: true }),
+      tokenCount(Box, Text, used),
     ] });
   }
-  // The picker sits at the right end of the second line, under the email, while signed in on claude or free tokens.
-  const picker = loggedIn && canBackup && (backup.status === 'off' || backup.status === 'on') ? modelPicker($, ui, free.models, free.picked) : undefined;
-  if (picker && backup.status === 'off') {
-    second = Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: [
-      Box({ flexShrink: 1, children: [second] }),
-      Box({ flexGrow: 1 }),
-      Box({ key: 'attentionfarm-model-slot', flexShrink: 0, children: [picker] }),
-    ] });
-  }
+  // The picker sits at the right end of the second line, under the email, only while on free tokens: on claude
+  // there is no free model to choose.
+  const picker = loggedIn && canBackup && backup.status === 'on' ? modelPicker($, ui, free.models, free.picked) : undefined;
   const pickedLabel = (free.picked || free.models[0])?.label;
   const rows = backupRows($, Box, Text, Button, account, backup, used, picker, pickedLabel) || [second];
   return frame(Box, [Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children: top }), ...rows], e.surface);
