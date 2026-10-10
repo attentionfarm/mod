@@ -185,7 +185,7 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(await view.find({ type: 'Text', text: "you're in." })).toBeUndefined();
   expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
   for (const request of sent) {
-    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.11');
+    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.12');
     expect(Object.keys(request.body ?? {}).every(key => ALLOWED_KEYS[request.path].includes(key))).toBe(true);
   }
   const after = view;
@@ -286,7 +286,7 @@ test('resend sends the same email again and says so', async ($, on) => {
 test('session start: restores from the keychain and confirms the session with the server', async ($, on) => {
   const live = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, live.clock);
-  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.11', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
+  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.12', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
   expect(await (await band($, 'terminal', 'live')).find({ type: 'Button', key: 'attentionfarm-account', text: MASKED })).toBeDefined();
 });
 
@@ -643,6 +643,20 @@ test('the switch on desktop: one press moves the halves once, one way, and redra
   expect(back.at(-1)).toBe(0);
   expect((await svg()).alt).toBe('on claude');
 });
+
+for (const surface of SURFACES) {
+  test(`the switch keeps one width on ${surface}, so its halves never move when the label changes`, async ($, on) => {
+    const { clock } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
+    await start($, clock, surface);
+    const view = await band($, surface);
+    const box = async () => (await view.find({ type: 'Box', key: surface === 'terminal' ? 'attentionfarm-switch' : 'attentionfarm-switch-label' }))?.props.minWidth;
+    const width = await box();
+    expect(width).toBe(surface === 'terminal' ? 21 : 18);
+    await view.press({ key: 'attentionfarm-free' });
+    await clock.advance(1_000);
+    expect(await box()).toBe(width);
+  });
+}
 
 test('the switch in the terminal: half blocks show which side is up', async ($, on) => {
   const { clock } = world(on, { keychain: { token: TOKEN, comment: MASKED } });

@@ -15,7 +15,7 @@ const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.3.11';
+const MOD_VERSION = '0.3.12';
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
@@ -879,6 +879,11 @@ function glyphs(t) {
   return t < 0.34 ? ['▀', '▄'] : t > 0.66 ? ['▄', '▀'] : ['█', '█'];
 }
 
+// The labels the switch shows; its label box is as wide as the longest, so a shorter one leaves room
+// instead of moving the halves.
+const SWITCH_LABELS = ['use free af tokens', 'switching…', 'back to claude'];
+const SWITCH_LABEL_WIDTH = Math.max(...SWITCH_LABELS.map(label => label.length));
+
 // The halves first, then the label, on the right beside the account. Only the label presses: anything laid over the
 // picture to make it press gets a box of the desktop's own drawn behind it, and that box flickers with
 // every frame of the move.
@@ -892,11 +897,16 @@ function exchangeButton(ui, surface, { key, label, pose: t, onPress }) {
       Box({ key: 'attentionfarm-switch-icon', flexDirection: 'row', alignItems: 'center', children: [
         Svg({ source: exchangeSvg(t), alt: t >= 0.5 ? 'on free af tokens' : 'on claude', width: 16, height: 16 }),
       ] }),
-      Button({ key, plain: true, onPress, children: [Text({ children: [label] })] }),
+      Box({ key: 'attentionfarm-switch-label', minWidth: SWITCH_LABEL_WIDTH, children: [
+        Button({ key, plain: true, onPress, children: [Text({ children: [label] })] }),
+      ] }),
     ] });
   }
   const [ink, tide] = glyphs(t);
-  return Button({ key, plain: true, label, onPress, children: [Text({ children: [ink, Text({ color: TIDE, children: [tide] }), ` ${label}`] })] });
+  // Two half blocks, a space, then the label: the box holds the longest label so nothing shifts.
+  return Box({ key: 'attentionfarm-switch', minWidth: SWITCH_LABEL_WIDTH + 3, children: [
+    Button({ key, plain: true, label, onPress, children: [Text({ children: [ink, Text({ color: TIDE, children: [tide] }), ` ${label}`] })] }),
+  ] });
 }
 
 // The resting band: two lines, the wordmark and one action, then the honest line.
