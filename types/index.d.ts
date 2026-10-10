@@ -10,6 +10,8 @@ declare module 'claude-code' {
       backup: { status: 'off' | 'offer' | 'switching' | 'on'; reason?: 'limit' | 'manual'; label?: string; remaining?: number; note?: string };
       // Free tokens this Claude Code session used through attentionfarm, from each request's usage.
       backupTokens: { input: number; output: number; cacheRead: number; cacheCreation: number; steps: number };
+      // Which half of the exchange switch sits up: 0 claude, 1 free af tokens; between while it moves.
+      switchPose: number;
       pane: {
         site: 'none' | 'pane' | 'band';
         step: 'email' | 'code' | 'account' | 'delete';

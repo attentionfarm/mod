@@ -1,6 +1,6 @@
 {
   "name": "attentionfarm",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "sign up or log in, an attentionfarm band above the prompt and a scrolling status line for claude code.",
   "author": {
     "name": "attentionfarm"

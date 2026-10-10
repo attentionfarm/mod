@@ -185,7 +185,7 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(await view.find({ type: 'Text', text: "you're in." })).toBeUndefined();
   expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
   for (const request of sent) {
-    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.8');
+    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.9');
     expect(Object.keys(request.body ?? {}).every(key => ALLOWED_KEYS[request.path].includes(key))).toBe(true);
   }
   const after = view;
@@ -286,7 +286,7 @@ test('resend sends the same email again and says so', async ($, on) => {
 test('session start: restores from the keychain and confirms the session with the server', async ($, on) => {
   const live = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, live.clock);
-  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.8', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
+  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.9', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
   expect(await (await band($, 'terminal', 'live')).find({ type: 'Button', key: 'attentionfarm-account', text: MASKED })).toBeDefined();
 });
 
@@ -609,8 +609,9 @@ for (const surface of SURFACES) {
   });
 }
 
-test('the switch on desktop: the exchange halves trade places, sliding once per change', async ($, on) => {
-  const { clock } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
+test('the switch on desktop: one press moves the halves once, one way, and redraws never move them again', async ($, on) => {
+  const { clock, written } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
+  const poseLog = () => (written as any[]).filter(e => e.key === 'switchPose').map(e => e.value as number);
   await start($, clock, 'desktop');
   const view = await band($, 'desktop');
   const svg = async () => (await view.find({ type: 'Svg' }))?.props;
@@ -619,17 +620,28 @@ test('the switch on desktop: the exchange halves trade places, sliding once per 
   expect((await svg()).source).toContain('class="ink" d="M30 10 A22 22 0 0 0 30 54 Z" transform="translate(0 -5)"');
   // The halves press too, through the blank Button laid over them.
   await view.press({ key: 'attentionfarm-free-icon' });
+  await clock.advance(1_000);
+  let poses = poseLog();
+  // switching, then on, then the token count: one move from claude to free, never back and forth.
+  // One eased move: ten frames, the last exactly on the far side.
+  expect(poses.length).toBe(10);
+  expect(poses.every((p, i) => i === 0 || p >= poses[i - 1])).toBe(true);
+  expect(poses.at(-1)).toBe(1);
   const free = await svg();
   expect(free.alt).toBe('on free af tokens');
   expect(free.source).toContain('transform="translate(0 5)"');
-  expect(free.source).toContain('from="0 -5" to="0 5"');
-  // A redraw repeats the same markup, so the move is never restarted.
+  expect(free.source).not.toContain('animate');
+  const moved = poses.length;
   await step($);
+  await clock.advance(1_000);
+  expect(poseLog().length).toBe(moved);
   expect((await svg()).source).toBe(free.source);
   await view.press({ key: 'attentionfarm-backup-off' });
-  const back = await svg();
-  expect(back.alt).toBe('on claude');
-  expect(back.source).toContain('from="0 5" to="0 -5"');
+  await clock.advance(1_000);
+  const back = poseLog().slice(moved);
+  expect(back.every((p, i) => i === 0 || p <= back[i - 1])).toBe(true);
+  expect(back.at(-1)).toBe(0);
+  expect((await svg()).alt).toBe('on claude');
 });
 
 test('the switch in the terminal: half blocks show which side is up', async ($, on) => {

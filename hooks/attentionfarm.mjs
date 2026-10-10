@@ -9,12 +9,13 @@ const BACKUP = { plugin: 'attentionfarm', key: 'backup' };
 // Free tokens this Claude Code session used through attentionfarm, counted here from each model
 // request's own usage. Its own key, so switching back to claude keeps it.
 const TOKENS = { plugin: 'attentionfarm', key: 'backupTokens' };
+const SWITCH = { plugin: 'attentionfarm', key: 'switchPose' };
 const NO_TOKENS = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, steps: 0 };
 const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.3.8';
+const MOD_VERSION = '0.3.9';
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
@@ -489,6 +490,47 @@ async function mintBackupKey($) {
   };
 }
 
+// Which half sits up: 0 claude, 1 free af tokens. The band draws the switch from this number alone.
+function switchTarget(backup) {
+  return backup.status === 'on' || backup.status === 'switching' ? 1 : 0;
+}
+
+// Every write of the backup state goes through here, so a change of side starts the one move it
+// should. switching → on, a token count, a note: the side stays the same, and nothing moves again.
+async function setBackup($, value) {
+  const before = switchTarget(await backupState($));
+  await $.state.set(BACKUP, value);
+  moveSwitch($, before, switchTarget(value)).catch(() => {});
+}
+
+// The move, in still frames: the band redraws the pose each step, so a redraw in the middle shows the
+// same frame instead of starting the move over. A newer move takes over from wherever this one is.
+const SWITCH_FRAMES = 10;
+const SWITCH_FRAME_MS = 40;
+let switchTimer;
+let switchHeading;
+async function moveSwitch($, before, target) {
+  // A move already heading there carries on untouched (switching, then on, is one move).
+  if (switchTimer && switchHeading === target) return;
+  // Where the halves are now: mid-move, or (before any move this session) the side the state was on.
+  const { value: start = before } = await $.state.get(SWITCH);
+  if (start === target) return;
+  switchTimer?.cancel();
+  switchHeading = target;
+  let frame = 0;
+  const timer = $.clock.every(SWITCH_FRAME_MS, async () => {
+    frame += 1;
+    const p = Math.min(1, frame / SWITCH_FRAMES);
+    const eased = p < 0.5 ? 4 * p * p * p : 1 - (-2 * p + 2) ** 3 / 2;
+    if (p >= 1) {
+      timer.cancel();
+      if (switchTimer === timer) switchTimer = undefined;
+    }
+    await $.state.set(SWITCH, p >= 1 ? target : start + (target - start) * eased);
+  });
+  switchTimer = timer;
+}
+
 async function switchToBackup($) {
   if (switching) return;
   const { reason = 'manual' } = await backupState($);
@@ -498,20 +540,20 @@ async function switchToBackup($) {
     return;
   }
   switching = true;
-  await $.state.set(BACKUP, { status: 'switching' });
+  await setBackup($, { status: 'switching' });
   try {
     const minted = await mintBackupKey($);
     if (minted.signedOut) return;
     if (minted.note) {
       // After a limit the offer stays up with the reason; a switch by choice goes back to the band and says why.
-      if (reason === 'limit') await $.state.set(BACKUP, { status: 'offer', reason, note: minted.note });
+      if (reason === 'limit') await setBackup($, { status: 'offer', reason, note: minted.note });
       else {
-        await $.state.set(BACKUP, INITIAL_BACKUP);
+        await setBackup($, INITIAL_BACKUP);
         $.ui.toast(minted.note);
       }
       return;
     }
-    await $.state.set(BACKUP, defined({ status: 'on', label: minted.label, remaining: minted.remaining }));
+    await setBackup($, defined({ status: 'on', label: minted.label, remaining: minted.remaining }));
     // After a limit stop the turn Claude could not finish carries on; a switch by choice waits for the person.
     if (reason === 'limit') await $.prompt.submit({ text: 'continue where you left off.' }).catch(() => {});
   } finally {
@@ -521,16 +563,16 @@ async function switchToBackup($) {
 
 async function switchBack($) {
   backupKey = undefined;
-  await $.state.set(BACKUP, INITIAL_BACKUP);
+  await setBackup($, INITIAL_BACKUP);
 }
 
 async function offerBackup($) {
-  await $.state.set(BACKUP, { status: 'offer', reason: 'limit' });
+  await setBackup($, { status: 'offer', reason: 'limit' });
 }
 
 async function setBackupNote($, note) {
   const current = await backupState($);
-  if (current.status === 'on') await $.state.set(BACKUP, defined({ ...current, note }));
+  if (current.status === 'on') await setBackup($, defined({ ...current, note }));
 }
 
 // One step to the free model: Claude Code's own request, rebuilt from what a mod can read.
@@ -621,7 +663,7 @@ async function* answerStep($, e) {
   try { await update($, TOKENS, tokens => addUsage(tokens, usage)); } catch {}
   try {
     const current = await backupState($);
-    if (current.status === 'on') await $.state.set(BACKUP, defined({ ...current, note: undefined, label: label || current.label, remaining: Number.isInteger(current.remaining) ? Math.max(0, current.remaining - 1) : undefined }));
+    if (current.status === 'on') await setBackup($, defined({ ...current, note: undefined, label: label || current.label, remaining: Number.isInteger(current.remaining) ? Math.max(0, current.remaining - 1) : undefined }));
   } catch {}
   yield { kind: 'stop', stopReason, usage };
   return { turnId: e.turnId, index: e.index, answer, toolUses, stopReason, usage };
@@ -636,7 +678,7 @@ async function refreshBackup($) {
   const result = await request($, 'GET', '/backup/status', { token });
   if (result.status === 200 && Number.isInteger(result.data?.remaining_today)) {
     const current = await backupState($);
-    if (current.status === 'on') await $.state.set(BACKUP, { ...current, remaining: result.data.remaining_today });
+    if (current.status === 'on') await setBackup($, { ...current, remaining: result.data.remaining_today });
   }
 }
 
@@ -809,7 +851,7 @@ function backupRows($, Box, Text, Button, account, backup, used) {
     ] }),
     controls(Box, [
       Button({ key: 'attentionfarm-backup-on', variant: 'secondary', label: loggedIn ? 'continue free' : 'sign up to continue free', onPress: () => switchToBackup($) }),
-      Button({ key: 'attentionfarm-backup-dismiss', plain: true, dimColor: true, label: 'not now', onPress: () => $.state.set(BACKUP, INITIAL_BACKUP) }),
+      Button({ key: 'attentionfarm-backup-dismiss', plain: true, dimColor: true, label: 'not now', onPress: () => setBackup($, INITIAL_BACKUP) }),
       Box({ flexGrow: 1 }),
       Button({ key: 'attentionfarm-backup-privacy', plain: true, dimColor: true, label: "what's shared", onPress: () => openPrivacy($) }),
     ]),
@@ -818,36 +860,28 @@ function backupRows($, Box, Text, Button, account, backup, used) {
 }
 
 // The exchange: two halves, ink for claude and tide for free af tokens. Whichever side is answering sits
-// up. A press slides them past each other in one motion; at its midpoint they line up into one circle.
-// Offsets are in the 64-unit drawing.
-const POSES = { claude: [-5, 5], free: [5, -5] };
-let pose;
-let poseFrom;
+// up; halfway through a switch they line up into one circle. Offsets are in the 64-unit drawing.
+const LIFT = 5;
 
-// Desktop draws the real halves. The source names the last move, from-to, so redraws repeat the same
-// markup and never restart it; only a new pose starts a new move.
-function exchangeSvg(next) {
-  if (pose !== next) {
-    poseFrom = pose;
-    pose = next;
-  }
-  const from = poseFrom && poseFrom !== pose ? POSES[poseFrom] : undefined;
-  const half = (cls, d, dy, fromDy) => `<path class="${cls}" d="${d}" transform="translate(0 ${dy})">${fromDy === undefined ? ''
-    : `<animateTransform attributeName="transform" type="translate" from="0 ${fromDy}" to="0 ${dy}" dur="0.5s" fill="freeze" calcMode="spline" keyTimes="0;1" keySplines="0.65 0 0.35 1"/>`}</path>`;
-  const [ink, tide] = POSES[pose];
+// One still frame of the pose (0 claude up, 1 free up). No animation inside the picture: a picture that
+// animates itself starts over each time the desktop rebuilds it, and one switch rebuilds it several times.
+function exchangeSvg(t) {
+  const dy = Number((LIFT * (2 * t - 1)).toFixed(2));
   return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
     + `<style>.ink{fill:#111111}.tide{fill:${TIDE}}@media (prefers-color-scheme: dark){.ink{fill:#F2F2F2}}</style>`
-    + half('ink', 'M30 10 A22 22 0 0 0 30 54 Z', ink, from?.[0])
-    + half('tide', 'M34 10 A22 22 0 0 1 34 54 Z', tide, from?.[1])
+    + `<path class="ink" d="M30 10 A22 22 0 0 0 30 54 Z" transform="translate(0 ${dy})"/>`
+    + `<path class="tide" d="M34 10 A22 22 0 0 1 34 54 Z" transform="translate(0 ${-dy})"/>`
     + '</svg>';
 }
 
 // The terminal draws the same idea in one row of text: a half block is a half up or down.
-const GLYPHS = { claude: ['▀', '▄'], free: ['▄', '▀'] };
+function glyphs(t) {
+  return t < 0.34 ? ['▀', '▄'] : t > 0.66 ? ['▄', '▀'] : ['█', '█'];
+}
 
 // The label comes first and the halves last, beside the account: a label of another length grows to
 // the left and the halves stay where they are. The whole slot presses.
-function exchangeButton(ui, surface, { key, label, pose: next, onPress }) {
+function exchangeButton(ui, surface, { key, label, pose: t, onPress }) {
   const { Box, Text, Button, Svg } = ui;
   // The terminal has no vector drawing (an Svg there draws nothing), so it gets the half blocks.
   if (Svg && surface !== 'terminal') {
@@ -858,34 +892,34 @@ function exchangeButton(ui, surface, { key, label, pose: next, onPress }) {
     return Box({ key: 'attentionfarm-switch', flexDirection: 'row', alignItems: 'center', columnGap: 1, children: [
       Button({ key, plain: true, onPress, children: [Text({ children: [label] })] }),
       Box({ key: 'attentionfarm-switch-icon', flexDirection: 'row', alignItems: 'center', children: [
-        Svg({ source: exchangeSvg(next), alt: next === 'free' ? 'on free af tokens' : 'on claude', width: 16, height: 16 }),
+        Svg({ source: exchangeSvg(t), alt: t >= 0.5 ? 'on free af tokens' : 'on claude', width: 16, height: 16 }),
       ] }),
       Box({ position: 'absolute', right: 0, top: 0, children: [
         Button({ key: `${key}-icon`, plain: true, onPress, children: [Text({ children: [BLANK.repeat(2)] })] }),
       ] }),
     ] });
   }
-  const [ink, tide] = GLYPHS[next];
+  const [ink, tide] = glyphs(t);
   return Button({ key, plain: true, label, onPress, children: [Text({ children: [`${label} `, ink, Text({ color: TIDE, children: [tide] })] })] });
 }
 
 // The resting band: two lines, the wordmark and one action, then the honest line.
-function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup = false) {
+function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup = false, pose = switchTarget(backup)) {
   const ui = $.ui.resolve(e);
   const { Box, Text, Button } = ui;
   const canLogin = LOGIN_SURFACES.has(e.surface) && account.status !== 'unsupported';
   const top = [wordmark($, ui, e.surface), Box({ flexGrow: 1 })];
   // One slot, two states: use free af tokens while on claude, back to claude while on free tokens.
   if (backup.status === 'on') {
-    top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-backup-off', label: 'back to claude', pose: 'free', onPress: () => switchBack($) }));
+    top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-backup-off', label: 'back to claude', pose, onPress: () => switchBack($) }));
   } else if (backup.status === 'switching') {
-    top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-switching', label: 'switching…', pose: 'free', onPress: () => {} }));
+    top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-switching', label: 'switching…', pose, onPress: () => {} }));
   }
   let second;
   if (account.status === 'in' || account.status === 'offline') {
     // Free tokens by choice, not only after a limit: one press switches.
     if (canBackup && backup.status === 'off') {
-      top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-free', label: 'use free af tokens', pose: 'claude', onPress: () => switchToBackup($) }));
+      top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-free', label: 'use free af tokens', pose, onPress: () => switchToBackup($) }));
     }
     top.push(Button({
       key: 'attentionfarm-account', plain: true, dimColor: true,
@@ -981,7 +1015,7 @@ export function register(on) {
     const result = await next(e);
     const backup = await backupState($);
     if (backup.status === 'on') {
-      if (backup.note) await $.state.set(BACKUP, defined({ ...backup, note: undefined }));
+      if (backup.note) await setBackup($, defined({ ...backup, note: undefined }));
       await refreshBackup($).catch(() => {});
     }
     return result;
@@ -1035,6 +1069,7 @@ export function register(on) {
     const backup = await backupState($);
     const { value: tokens = NO_TOKENS } = await $.state.get(TOKENS);
     const used = tokenTotal(tokens);
+    const { value: pose = switchTarget(backup) } = await $.state.get(SWITCH);
     const canBackup = LOGIN_SURFACES.has(e.surface);
     if (LOGIN_SURFACES.has(e.surface)) {
       bandRequestId = e.requestId;
@@ -1044,6 +1079,6 @@ export function register(on) {
         return Box({ flexDirection: 'column', children: [native, frame(Box, [renderFlow($, e, pane, account)], e.surface)] });
       }
     }
-    return Box({ flexDirection: 'column', children: [native, renderBand($, e, account, backup, used, canBackup)] });
+    return Box({ flexDirection: 'column', children: [native, renderBand($, e, account, backup, used, canBackup, pose)] });
   });
 }
