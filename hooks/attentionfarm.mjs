@@ -14,7 +14,7 @@ const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.3.0';
+const MOD_VERSION = '0.3.1';
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
@@ -508,7 +508,12 @@ async function switchToBackup($) {
     const minted = await mintBackupKey($);
     if (minted.signedOut) return;
     if (minted.note) {
-      await $.state.set(BACKUP, { status: 'offer', reason, note: minted.note });
+      // After a limit the offer stays up with the reason; a switch by choice goes back to the band and says why.
+      if (reason === 'limit') await $.state.set(BACKUP, { status: 'offer', reason, note: minted.note });
+      else {
+        await $.state.set(BACKUP, INITIAL_BACKUP);
+        $.ui.toast(minted.note);
+      }
       return;
     }
     await $.state.set(BACKUP, defined({ status: 'on', label: minted.label, remaining: minted.remaining }));
@@ -524,8 +529,8 @@ async function switchBack($) {
   await $.state.set(BACKUP, INITIAL_BACKUP);
 }
 
-async function offerBackup($, reason) {
-  await $.state.set(BACKUP, { status: 'offer', reason });
+async function offerBackup($) {
+  await $.state.set(BACKUP, { status: 'offer', reason: 'limit' });
 }
 
 async function setBackupNote($, note) {
@@ -786,13 +791,10 @@ function backupRows($, Box, Text, Button, account, backup, used) {
   }
   if (backup.status !== 'offer') return undefined;
   const loggedIn = account.status === 'in' || account.status === 'offline';
-  const [title, detail] = backup.reason === 'limit'
-    ? ['you hit your claude limit.', 'keep going on a free model through attentionfarm, or wait for claude.']
-    : ['use free tokens instead of claude?', 'this session runs on a free model through attentionfarm until you switch back.'];
   return [
     Box({ flexDirection: 'row', columnGap: 1, children: [
-      line(Text, title, { bold: true }),
-      line(Text, detail, { dimColor: true, wrap: 'truncate-end' }),
+      line(Text, 'you hit your claude limit.', { bold: true }),
+      line(Text, 'keep going on a free model through attentionfarm, or wait for claude.', { dimColor: true, wrap: 'truncate-end' }),
     ] }),
     controls(Box, [
       Button({ key: 'attentionfarm-backup-on', variant: 'secondary', label: loggedIn ? 'continue free' : 'sign up to continue free', onPress: () => switchToBackup($) }),
@@ -811,9 +813,9 @@ function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup 
   const top = [wordmark(Text), Box({ flexGrow: 1 })];
   let second;
   if (account.status === 'in' || account.status === 'offline') {
-    // Free tokens by choice, not only after a limit: one press shows the offer and what is shared.
+    // Free tokens by choice, not only after a limit: one press switches.
     if (canBackup && backup.status === 'off') {
-      top.push(Button({ key: 'attentionfarm-free', plain: true, label: 'use free tokens', onPress: () => offerBackup($, 'manual') }));
+      top.push(Button({ key: 'attentionfarm-free', plain: true, label: 'use free tokens', onPress: () => switchToBackup($) }));
     }
     top.push(Button({
       key: 'attentionfarm-account', plain: true, dimColor: true,
@@ -901,7 +903,7 @@ export function register(on) {
   on('classic.StopFailure', async ($, e, next) => {
     const result = await next(e);
     const backup = await backupState($);
-    if (backup.status === 'off' && BACKUP_STOPS.has(e.error)) await offerBackup($, 'limit');
+    if (backup.status === 'off' && BACKUP_STOPS.has(e.error)) await offerBackup($);
     return result;
   });
 
@@ -937,8 +939,9 @@ export function register(on) {
     if (args === 'free' || args === 'backup') {
       if ((await backupState($)).status === 'on') return { text: 'free tokens are already on. use back to claude in the band to switch back.' };
       if (!(await usableAccount($))) return { text: COPY.unsupported };
-      await offerBackup($, 'manual');
-      return { text: 'opened.' };
+      await switchToBackup($);
+      const now = await backupState($);
+      return { text: now.status === 'on' ? 'free tokens on. use back to claude in the band to switch back.' : 'free tokens could not start.' };
     }
     if (args === 'logout' || args === 'log out') {
       if (!(await usableAccount($))) return { text: COPY.unsupported };

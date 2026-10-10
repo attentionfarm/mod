@@ -185,7 +185,7 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(await view.find({ type: 'Text', text: "you're in." })).toBeUndefined();
   expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
   for (const request of sent) {
-    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.0');
+    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.1');
     expect(Object.keys(request.body ?? {}).every(key => ALLOWED_KEYS[request.path].includes(key))).toBe(true);
   }
   const after = view;
@@ -286,7 +286,7 @@ test('resend sends the same email again and says so', async ($, on) => {
 test('session start: restores from the keychain and confirms the session with the server', async ($, on) => {
   const live = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, live.clock);
-  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.0', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
+  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.1', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
   expect(await (await band($, 'terminal', 'live')).find({ type: 'Button', key: 'attentionfarm-account', text: MASKED })).toBeDefined();
 });
 
@@ -562,22 +562,32 @@ test('free backup: logged out, the offer asks for sign-up first; an unavailable 
   expect(out.engine.steps).toBe(1);
 });
 
-test('free tokens by choice: the band button and /attentionfarm free offer it without a limit, and nothing is sent for the person', async ($, on) => {
+test('free tokens by choice: the band button and /attentionfarm free switch at once, with no confirmation, and nothing is sent for the person', async ($, on) => {
   const { clock, submitted, engine } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, clock, 'desktop');
   const view = await band($, 'desktop');
   await view.press({ key: 'attentionfarm-free' });
-  expect(await view.find({ type: 'Text', text: 'use free tokens instead of claude?' })).toBeDefined();
-  expect(await view.find({ type: 'Text', text: "free models' hosts may learn from what they receive." })).toBeDefined();
-  await view.press({ key: 'attentionfarm-backup-dismiss' });
-  expect(await $.command.run({ command: 'attentionfarm', args: 'free' })).toMatchObject({ text: 'opened.' });
-  await view.press({ key: 'attentionfarm-backup-on' });
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-on' })).toBeUndefined();
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-off', text: 'back to claude' })).toBeDefined();
   expect(submitted).toEqual([]);
   expect(await $.command.run({ command: 'attentionfarm', args: 'free' })).toMatchObject({ text: 'free tokens are already on. use back to claude in the band to switch back.' });
   await step($);
   expect(engine.steps).toBe(0);
   await view.press({ key: 'attentionfarm-backup-off' });
   expect(await view.find({ type: 'Button', key: 'attentionfarm-free', text: 'use free tokens' })).toBeDefined();
+  expect(await $.command.run({ command: 'attentionfarm', args: 'free' })).toMatchObject({ text: 'free tokens on. use back to claude in the band to switch back.' });
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-off' })).toBeDefined();
+});
+
+test('free tokens by choice: a service that cannot start says so in a toast and leaves the band as it was', async ($, on) => {
+  const { clock, toasts } = world(on, { keychain: { token: TOKEN, comment: MASKED }, replies: { '/backup/key': { status: 503, body: { error: { code: 'backup_unavailable', message: 'x' } } } } });
+  await start($, clock);
+  const view = await band($, 'terminal');
+  await view.press({ key: 'attentionfarm-free' });
+  expect(toasts).toContain("free backup isn't available right now.");
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-backup-on' })).toBeUndefined();
+  expect(await view.find({ type: 'Button', key: 'attentionfarm-free', text: 'use free tokens' })).toBeDefined();
+  expect(await $.command.run({ command: 'attentionfarm', args: 'free' })).toMatchObject({ text: 'free tokens could not start.' });
 });
 
 test('free tokens by choice: no button while logged out', async ($, on) => {
