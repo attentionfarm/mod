@@ -14,7 +14,7 @@ const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.3.3';
+const MOD_VERSION = '0.3.4';
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
@@ -34,7 +34,8 @@ const INITIAL_ACCOUNT = { status: 'unknown' };
 // ever appears as a border or as a chip with its own ink, which reads on light and dark alike.
 const TIDE = '#2EC4B6';
 const TIDE_INK = '#03211F';
-const PRIVACY_URL = 'https://attentionfarm.com/privacy';
+const SITE_URL = 'https://attentionfarm.com';
+const PRIVACY_URL = `${SITE_URL}/privacy`;
 const FLASH_MS = 5000;
 // `site` is where the flow is drawn: a pane opened by a command, or the band itself after one of
 // its buttons is pressed (the band then holds the keyboard, so a pane could not take it).
@@ -672,8 +673,9 @@ function line(Text, value, props = {}) {
   return Text({ ...props, children: [value] });
 }
 
-function wordmark(Text) {
-  return Text({ bold: true, backgroundColor: TIDE, color: TIDE_INK, children: [' attentionfarm '] });
+// The wordmark links to the website: an OSC 8 link in the terminal, an anchor on desktop.
+function wordmark(Text, Link) {
+  return Text({ bold: true, backgroundColor: TIDE, color: TIDE_INK, children: [Link({ href: SITE_URL, children: [' attentionfarm '] })] });
 }
 
 // Every attentionfarm band wears a tide outline. The desktop app draws its own padded card around
@@ -799,9 +801,9 @@ function backupRows($, Box, Text, Button, account, backup, used) {
 
 // The resting band: two lines, the wordmark and one action, then the honest line.
 function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup = false) {
-  const { Box, Text, Button } = $.ui.resolve(e);
+  const { Box, Text, Button, Link } = $.ui.resolve(e);
   const canLogin = LOGIN_SURFACES.has(e.surface) && account.status !== 'unsupported';
-  const top = [wordmark(Text), Box({ flexGrow: 1 })];
+  const top = [wordmark(Text, Link), Box({ flexGrow: 1 })];
   // One slot, two states: use free af tokens while on claude, back to claude while on free tokens.
   if (backup.status === 'on') {
     top.push(Button({ key: 'attentionfarm-backup-off', plain: true, label: 'back to claude', onPress: () => switchBack($) }));

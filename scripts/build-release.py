@@ -13,13 +13,13 @@ parser.add_argument('--output-dir', type=Path, default=root / 'dist')
 args = parser.parse_args()
 paths = ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/attentionfarm.mjs', 'hooks/tool-schemas.mjs', 'types/index.d.ts', 'README.md', 'INSTALL.md']
 manifest = json.loads((root / paths[0]).read_text())
-if manifest['name'] != 'attentionfarm' or manifest['version'] != '0.3.3':
+if manifest['name'] != 'attentionfarm' or manifest['version'] != '0.3.4':
     raise SystemExit('Unexpected candidate identity/version')
 for relative in paths:
     if not (root / relative).is_file() or (root / relative).is_symlink():
         raise SystemExit(f'Missing or linked release input: {relative}')
 args.output_dir.mkdir(parents=True, exist_ok=True)
-archive = args.output_dir / 'attentionfarm-mod-v0.3.3.zip'
+archive = args.output_dir / 'attentionfarm-mod-v0.3.4.zip'
 records = []
 with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as bundle:
     for relative in sorted(paths):

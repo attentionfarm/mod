@@ -185,7 +185,7 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(await view.find({ type: 'Text', text: "you're in." })).toBeUndefined();
   expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
   for (const request of sent) {
-    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.3');
+    expect(request.headers['x-attentionfarm-mod']).toBe('0.3.4');
     expect(Object.keys(request.body ?? {}).every(key => ALLOWED_KEYS[request.path].includes(key))).toBe(true);
   }
   const after = view;
@@ -286,7 +286,7 @@ test('resend sends the same email again and says so', async ($, on) => {
 test('session start: restores from the keychain and confirms the session with the server', async ($, on) => {
   const live = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, live.clock);
-  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.3', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
+  expect(live.sent).toEqual([{ path: '/me', method: 'GET', headers: { 'x-attentionfarm-mod': '0.3.4', authorization: `Bearer ${TOKEN}` }, body: undefined }]);
   expect(await (await band($, 'terminal', 'live')).find({ type: 'Button', key: 'attentionfarm-account', text: MASKED })).toBeDefined();
 });
 
@@ -597,6 +597,17 @@ test('free tokens by choice: a service that cannot start says so in a toast and 
   expect(await view.find({ type: 'Button', key: 'attentionfarm-free', text: 'use free af tokens' })).toBeDefined();
   expect(await $.command.run({ command: 'attentionfarm', args: 'free' })).toMatchObject({ text: 'free tokens could not start.' });
 });
+
+for (const surface of SURFACES) {
+  test(`the attentionfarm wordmark links to the website on ${surface}`, async ($, on) => {
+    const { clock } = world(on);
+    await start($, clock, surface);
+    const view = await band($, surface);
+    const link = await view.find({ type: 'Link' });
+    expect(link?.props.href).toBe('https://attentionfarm.com');
+    expect(JSON.stringify(link)).toContain(' attentionfarm ');
+  });
+}
 
 test('free tokens by choice: no button while logged out', async ($, on) => {
   const { clock } = world(on);

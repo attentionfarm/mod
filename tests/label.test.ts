@@ -14,7 +14,7 @@ test('the tide wordmark composes with native content on desktop and terminal and
     const band = await $.ui.mount(target);
     expect((await band.find({ type: 'Text', text: ' attentionfarm ' }))?.props).toMatchObject({ bold: true, backgroundColor: '#2EC4B6', color: '#03211F' });
     expect(await band.find({ type: 'Text', text: 'Native content' })).toBeDefined();
-    expect(await band.find({ type: 'Link' })).toBeUndefined();
+    expect((await band.find({ type: 'Link' }))?.props).toMatchObject({ href: 'https://attentionfarm.com' });
     await band.unmount();
     const survey = await $.ui.mount({ ...target, requestId: `${surface}-survey`, props: { ...target.props, hasSurvey: true } });
     expect(await survey.find({ type: 'Text', text: ' attentionfarm ' })).toBeUndefined();
