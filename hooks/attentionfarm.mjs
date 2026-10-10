@@ -15,7 +15,7 @@ const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.3.10';
+const MOD_VERSION = '0.3.11';
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
@@ -879,8 +879,7 @@ function glyphs(t) {
   return t < 0.34 ? ['▀', '▄'] : t > 0.66 ? ['▄', '▀'] : ['█', '█'];
 }
 
-// The halves first, then the label. The switch sits right after the wordmark, so the halves keep one
-// place and a label of another length grows to the right. Only the label presses: anything laid over the
+// The halves first, then the label, on the right beside the account. Only the label presses: anything laid over the
 // picture to make it press gets a box of the desktop's own drawn behind it, and that box flickers with
 // every frame of the move.
 function exchangeButton(ui, surface, { key, label, pose: t, onPress }) {
@@ -905,9 +904,9 @@ function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup 
   const ui = $.ui.resolve(e);
   const { Box, Text, Button } = ui;
   const canLogin = LOGIN_SURFACES.has(e.surface) && account.status !== 'unsupported';
-  const top = [wordmark($, ui, e.surface)];
+  const top = [wordmark($, ui, e.surface), Box({ flexGrow: 1 })];
   const loggedIn = account.status === 'in' || account.status === 'offline';
-  // One slot, three states, right after the wordmark: use free af tokens while on claude (free tokens by
+  // One slot, three states, on the right beside the account: use free af tokens while on claude (free tokens by
   // choice, not only after a limit), switching… mid-way, back to claude while on free tokens.
   if (backup.status === 'on') {
     top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-backup-off', label: 'back to claude', pose, onPress: () => switchBack($) }));
@@ -916,7 +915,6 @@ function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup 
   } else if (loggedIn && canBackup && backup.status === 'off') {
     top.push(exchangeButton(ui, e.surface, { key: 'attentionfarm-free', label: 'use free af tokens', pose, onPress: () => switchToBackup($) }));
   }
-  top.push(Box({ flexGrow: 1 }));
   let second;
   if (loggedIn) {
     top.push(Button({
