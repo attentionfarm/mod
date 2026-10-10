@@ -15,13 +15,13 @@ paths = ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/attentionfarm.
 # The house ad: 180 frames and its sound, under assets/ad.
 paths += [f'assets/ad/f{i:03d}.png' for i in range(180)] + ['assets/ad/house-ad.m4a']
 manifest = json.loads((root / paths[0]).read_text())
-if manifest['name'] != 'attentionfarm' or manifest['version'] != '0.4.0':
+if manifest['name'] != 'attentionfarm' or manifest['version'] != '0.4.1':
     raise SystemExit('Unexpected candidate identity/version')
 for relative in paths:
     if not (root / relative).is_file() or (root / relative).is_symlink():
         raise SystemExit(f'Missing or linked release input: {relative}')
 args.output_dir.mkdir(parents=True, exist_ok=True)
-archive = args.output_dir / 'attentionfarm-mod-v0.4.0.zip'
+archive = args.output_dir / 'attentionfarm-mod-v0.4.1.zip'
 records = []
 with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as bundle:
     for relative in sorted(paths):

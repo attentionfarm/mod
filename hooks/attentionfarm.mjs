@@ -24,7 +24,7 @@ const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.4.0';
+const MOD_VERSION = '0.4.1';
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
@@ -502,6 +502,75 @@ const STEP_MAX_TOKENS = 16000;
 const STOP_REASONS = new Set(['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'refusal']);
 const ANY_INPUT = { type: 'object', additionalProperties: true };
 
+// A free model has no prompt cache, so every step pays for the whole request again: a hello that reads
+// two files is three steps. What a step sends is trimmed to what a free model can use.
+// The tools it is offered: the core ones. Connectors' tools, subagents, skills and the rest stay with claude.
+const FREE_TOOLS = new Set(['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'NotebookEdit', 'TodoWrite', 'AskUserQuestion']);
+// Reminders that only describe tools a free step is not offered.
+const UNOFFERED_REMINDERS = [
+  /^<system-reminder>\s*The following deferred tools/,
+  /^<system-reminder>\s*Available agent types/,
+  /^<system-reminder>\s*# MCP Server Instructions/,
+  /^<system-reminder>\s*The following skills (are available|were invoked)/,
+];
+// An instruction file (CLAUDE.md, AGENTS.md) keeps its first part; the model can read the rest.
+const FREE_FILE_CHARS = 6000;
+const FREE_REMINDER_CHARS = 6000;
+// Messages before the last few keep a shorter copy of long tool results, and no pictures or thinking.
+const FREE_RECENT_MESSAGES = 6;
+const FREE_OLD_RESULT_CHARS = 2000;
+
+function clip(text, limit, what) {
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit)}\n[… ${text.length - limit} more characters ${what} left out of this free step]`;
+}
+
+function trimReminder(text) {
+  if (UNOFFERED_REMINDERS.some(pattern => pattern.test(text))) return undefined;
+  if (text.length <= FREE_REMINDER_CHARS) return text;
+  if (!/\nContents of /.test(text)) return clip(text, FREE_REMINDER_CHARS, 'of this note');
+  const body = text.replace(/\n?<\/system-reminder>\s*$/, '');
+  const parts = body.split(/(?=^Contents of .+:$)/m).map(part => {
+    const path = /^Contents of (\S+)/.exec(part)?.[1];
+    return path ? clip(part, FREE_FILE_CHARS, `of ${path} (read the file for them)`) : part;
+  });
+  return `${parts.join('')}\n</system-reminder>`;
+}
+
+function trimOldBlock(block) {
+  if (block?.type === 'image' || block?.type === 'document') return { type: 'text', text: `[a ${block.type} left out of this free step]` };
+  if (block?.type !== 'tool_result') return block;
+  if (typeof block.content === 'string') return { ...block, content: clip(block.content, FREE_OLD_RESULT_CHARS, 'of this result') };
+  if (!Array.isArray(block.content)) return block;
+  return { ...block, content: block.content.map(part => (part?.type === 'text' && typeof part.text === 'string'
+    ? { ...part, text: clip(part.text, FREE_OLD_RESULT_CHARS, 'of this result') }
+    : part?.type === 'image' ? { type: 'text', text: '[a picture left out of this free step]' } : part)) };
+}
+
+function freeMessages(messages) {
+  const recentFrom = messages.length - FREE_RECENT_MESSAGES;
+  return messages.map((message, at) => {
+    if (!Array.isArray(message?.content)) return message;
+    const old = at < recentFrom;
+    let content = message.content.flatMap(block => {
+      if (message.role === 'user' && block?.type === 'text' && typeof block.text === 'string' && block.text.startsWith('<system-reminder>')) {
+        const text = trimReminder(block.text);
+        return text === undefined ? [] : [{ ...block, text }];
+      }
+      if (old && block?.type === 'thinking') return [];
+      return [old ? trimOldBlock(block) : block];
+    });
+    // A message keeps at least one block.
+    if (!content.length) content = [{ type: 'text', text: '(notes left out of this free step)' }];
+    return { ...message, content };
+  });
+}
+
+// The system prompt's sections, less the ones about tools a free step is not offered (browsers, panes).
+function freeSystem(sections) {
+  return sections.filter(section => !/\bmcp__/.test(section.text)).map(section => section.text).join('\n\n');
+}
+
 function tokenTotal(tokens = NO_TOKENS) {
   return tokens.input + tokens.output + tokens.cacheRead + tokens.cacheCreation;
 }
@@ -678,10 +747,12 @@ async function askFreeModel($, e) {
   const { api } = await target($);
   const found = e.agentId ? await $.session.messages({ agentId: e.agentId, as: 'api' }) : await $.session.messages({ as: 'api' });
   if (!Array.isArray(found)) return { note: COPY.backupUnavailable };
-  const tools = (await $.tool.list()).map(tool => ({ name: tool.name, description: tool.description, input_schema: TOOL_SCHEMAS[tool.name] || ANY_INPUT }));
+  const tools = (await $.tool.list())
+    .filter(tool => !tool.mcp && FREE_TOOLS.has(tool.name))
+    .map(tool => ({ name: tool.name, description: tool.description, input_schema: TOOL_SCHEMAS[tool.name] || ANY_INPUT }));
   // The picked model goes first at the server; with no pick, the server's own order.
   const picked = await pickedModel($).catch(() => undefined);
-  const body = JSON.stringify(defined({ model: picked?.id || 'attentionfarm-free', max_tokens: STEP_MAX_TOKENS, system: systemPrompt || undefined, messages: found, tools, stream: false }));
+  const body = JSON.stringify(defined({ model: picked?.id || 'attentionfarm-free', max_tokens: STEP_MAX_TOKENS, system: systemPrompt || undefined, messages: freeMessages(found), tools, stream: false }));
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (!backupKey) {
       const minted = await mintBackupKey($);
@@ -1372,10 +1443,10 @@ export function register(on) {
     return result;
   });
 
-  // Free backup keeps the system prompt Claude Code composed, to send with each free step.
+  // Free backup keeps the system prompt Claude Code composed, trimmed, to send with each free step.
   on('prompt.compose', async ($, e, next) => {
     const result = await next(e);
-    try { systemPrompt = result.sections.map(section => section.text).join('\n\n'); } catch {}
+    try { systemPrompt = freeSystem(result.sections); } catch {}
     return result;
   });
 

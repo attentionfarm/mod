@@ -43,7 +43,7 @@ const ALLOWED_KEYS: Record<string, string[]> = {
 type Reply = { status: number; body?: unknown; headers?: Record<string, string> } | 'offline';
 type Sent = { path: string; method: string; headers: Record<string, string>; body?: Record<string, unknown> };
 
-function world(on: On, options: { keychain?: { token: string; comment: string }; replies?: Record<string, Reply | Reply[]>; security?: boolean; toolCheck?: Record<string, unknown>; store?: Record<string, unknown> } = {}) {
+function world(on: On, options: { keychain?: { token: string; comment: string }; replies?: Record<string, Reply | Reply[]>; security?: boolean; toolCheck?: Record<string, unknown>; store?: Record<string, unknown>; conversation?: unknown[]; sections?: unknown[] } = {}) {
   const clock = mock.clock(on, { now: 1_000_000 });
   mock.env(on, {});
   // The plugin's store between sessions, answered from memory so a test can read what was kept.
@@ -62,9 +62,9 @@ function world(on: On, options: { keychain?: { token: string; comment: string };
     return { turnId: e.turnId, index: e.index, answer: 'claude answered', toolUses: [], stopReason: 'end_turn', usage: null };
   } as any);
   // What a free step reads: the conversation, the system prompt and the tools.
-  on('session.messages', () => ({ value: CONVERSATION }) as any);
+  on('session.messages', () => ({ value: options.conversation ?? CONVERSATION }) as any);
   on('tool.list', () => ({ value: [{ name: 'Bash', description: 'runs a command', mcp: false }, { name: 'mcp__docs__search', description: 'searches docs', mcp: true }] }) as any);
-  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'SYSTEM PROMPT', scope: 'shared' }] }) as any);
+  on('prompt.compose', () => ({ sections: options.sections ?? [{ id: 'intro', text: 'SYSTEM PROMPT', scope: 'shared' }] }) as any);
   on('tool.check', () => (options.toolCheck ?? { decision: 'allow' }) as any);
   const sent: Sent[] = [];
   const toasts: string[] = [];
@@ -202,7 +202,7 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(await view.find({ type: 'Text', text: "you're in." })).toBeUndefined();
   expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
   for (const request of sent) {
-    expect(request.headers['x-attentionfarm-mod']).toBe('0.4.0');
+    expect(request.headers['x-attentionfarm-mod']).toBe('0.4.1');
     expect(Object.keys(request.body ?? {}).every(key => ALLOWED_KEYS[request.path].includes(key))).toBe(true);
   }
   const after = view;
@@ -304,7 +304,7 @@ test('session start: restores from the keychain and confirms the session with th
   const live = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, live.clock);
   // The session, then the free models for the picker.
-  expect(live.sent).toEqual(['/me', '/backup/status', '/ad/status'].map(path => ({ path, method: 'GET', headers: { 'x-attentionfarm-mod': '0.4.0', authorization: `Bearer ${TOKEN}` }, body: undefined })));
+  expect(live.sent).toEqual(['/me', '/backup/status', '/ad/status'].map(path => ({ path, method: 'GET', headers: { 'x-attentionfarm-mod': '0.4.1', authorization: `Bearer ${TOKEN}` }, body: undefined })));
   expect(await (await band($, 'terminal', 'live')).find({ type: 'Button', key: 'attentionfarm-account', text: MASKED })).toBeDefined();
 });
 
@@ -460,6 +460,47 @@ async function freeOn($: any, view: any) {
   await view.press({ key: 'attentionfarm-backup-on' });
 }
 
+test('a free step sends a trimmed request: no notes about tools it is not offered, instruction files cut short, old results shortened', async ($, on) => {
+  const reminder = (text: string) => ({ type: 'text', text: `<system-reminder>\n${text}\n</system-reminder>` });
+  const huge = 'x'.repeat(20000);
+  const conversation = [
+    { role: 'user', content: [
+      reminder('The following skills are available for use with the Skill tool:\n- a skill'),
+      reminder('# MCP Server Instructions\n\nuse the docs'),
+      reminder(`Codebase and user instructions are shown below.\n\nContents of /home/AGENTS.md (user instructions):\n\n${huge}\n\nContents of /repo/CLAUDE.md (project instructions):\n\nkeep tests green`),
+      { type: 'text', text: 'read the log' },
+    ] },
+    { role: 'assistant', content: [{ type: 'thinking', thinking: 'long thoughts' }, { type: 'tool_use', id: 'toolu_1', name: 'Read', input: { file_path: '/log' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: [{ type: 'text', text: huge }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }] }] },
+    ...Array.from({ length: 6 }, (_, i) => ({ role: i % 2 ? 'user' : 'assistant', content: [{ type: 'text', text: `turn ${i}` }] })),
+  ];
+  const sections = [{ id: 'intro', text: 'SYSTEM PROMPT', scope: 'shared' }, { id: 'browser', text: 'use mcp__Claude_Browser__navigate to browse', scope: 'session' }];
+  const { clock, sent } = world(on, { keychain: { token: TOKEN, comment: MASKED }, conversation, sections });
+  await start($, clock);
+  const view = await band($, 'terminal');
+  await $.classic.StopFailure(LIMIT);
+  await view.press({ key: 'attentionfarm-backup-on' });
+  await $.prompt.compose({ model: 'claude-opus-5-5', promptModel: 'claude-opus-5-5', surfaces: ['terminal'], tools: ['Bash'], outputStyle: null, traits: [] });
+  await step($);
+  const body = sent.find(request => request.path === '/backup/v1/messages')!.body as any;
+  expect(body.system).toBe('SYSTEM PROMPT');
+  const first = body.messages[0].content.map((block: any) => block.text);
+  expect(first).toHaveLength(2);
+  expect(first[0]).toContain('keep tests green');
+  expect(first[0]).toContain('more characters of /home/AGENTS.md (read the file for them) left out of this free step');
+  expect(first[0].length).toBeLessThan(7000);
+  expect(first[0].endsWith('</system-reminder>')).toBe(true);
+  expect(first[1]).toBe('read the log');
+  // Older than the last few messages: no thinking, a shorter result, no picture; the pairing stays.
+  expect(body.messages[1].content).toEqual([{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: { file_path: '/log' } }]);
+  const result = body.messages[2].content[0];
+  expect(result.tool_use_id).toBe('toolu_1');
+  expect(result.content[0].text.length).toBeLessThan(2200);
+  expect(result.content[1]).toEqual({ type: 'text', text: '[a picture left out of this free step]' });
+  expect(body.messages.slice(3)).toEqual(conversation.slice(3));
+  expect(JSON.stringify(body).length).toBeLessThan(12000);
+});
+
 for (const surface of SURFACES) {
   test(`free backup on ${surface}: the mod answers the step itself, claude sends nothing, and the band counts the tokens`, async ($, on) => {
     const { clock, sent, submitted, engine, written } = world(on, { keychain: { token: TOKEN, comment: MASKED } });
@@ -476,9 +517,9 @@ for (const surface of SURFACES) {
     const asked = sent.find(request => request.path === '/backup/v1/messages')!;
     expect(asked.headers.authorization).toBe(`Bearer ${BACKUP_KEY}`);
     expect(asked.body).toMatchObject({ system: 'SYSTEM PROMPT', messages: CONVERSATION, stream: false });
+    // The core tools only: a connector's tool stays with claude.
     expect((asked.body as any).tools).toEqual([
       { name: 'Bash', description: 'runs a command', input_schema: TOOL_SCHEMAS.Bash },
-      { name: 'mcp__docs__search', description: 'searches docs', input_schema: { type: 'object', additionalProperties: true } },
     ]);
     expect(chunks).toEqual([
       { kind: 'thinking', index: 0, text: 'let me look' },

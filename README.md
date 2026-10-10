@@ -54,7 +54,7 @@ delete account removes your account, sessions and backup keys immediately. see [
 
 when claude stops at a usage limit, the band offers **continue free**. you can also switch any time, with no confirmation: press **use free af tokens** in the band, or run `/attentionfarm free`. it works in the terminal and in the claude desktop app.
 
-- while it is on, the mod answers each model step itself: it sends the conversation, claude code's system prompt and the tool list to attentionfarm, which passes them to a free model on openrouter (nemotron 3 ultra to start). claude code sends nothing to anthropic for those steps, and your claude login is never used or shared.
+- while it is on, the mod answers each model step itself: it sends the conversation, claude code's system prompt and the core tools (bash, read, edit, write) to attentionfarm, trimmed so each step costs less: long instruction files are cut to their first part, notes about connectors, skills and subagents are left out, and older tool results are shortened. attentionfarm passes them to a free model on openrouter (nemotron 3 ultra to start). claude code sends nothing to anthropic for those steps, and your claude login is never used or shared.
 - every tool call the free model asks for is put to you before it runs, even in auto mode. a deny stays a deny.
 - **back to claude** switches back at once. nothing is written to `~/.claude` or your environment.
 - attentionfarm keeps none of your prompts or code, but free models' hosts may keep and learn from what they receive.
