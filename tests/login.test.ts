@@ -3,6 +3,7 @@ import type { On } from 'claude-code';
 import { TOOL_SCHEMAS } from '../hooks/tool-schemas.mjs';
 
 const API = 'https://api.attentionfarm.com/api/mod';
+const LATEST_MANIFEST = 'https://raw.githubusercontent.com/attentionfarm/mod/main/.claude-plugin/plugin.json';
 const TOKEN = `afm_${'A'.repeat(43)}`;
 const EMAIL = 'you@example.com';
 const MASKED = 'y•••@example.com';
@@ -43,7 +44,7 @@ const ALLOWED_KEYS: Record<string, string[]> = {
 type Reply = { status: number; body?: unknown; headers?: Record<string, string> } | 'offline';
 type Sent = { path: string; method: string; headers: Record<string, string>; body?: Record<string, unknown> };
 
-function world(on: On, options: { keychain?: { token: string; comment: string }; replies?: Record<string, Reply | Reply[]>; security?: boolean; toolCheck?: Record<string, unknown>; store?: Record<string, unknown>; conversation?: unknown[]; sections?: unknown[] } = {}) {
+function world(on: On, options: { keychain?: { token: string; comment: string }; replies?: Record<string, Reply | Reply[]>; security?: boolean; toolCheck?: Record<string, unknown>; store?: Record<string, unknown>; conversation?: unknown[]; sections?: unknown[]; latest?: string; updateExit?: number; reload?: boolean } = {}) {
   const clock = mock.clock(on, { now: 1_000_000 });
   mock.env(on, {});
   // The plugin's store between sessions, answered from memory so a test can read what was kept.
@@ -90,6 +91,13 @@ function world(on: On, options: { keychain?: { token: string; comment: string };
   on('session.end', ($, e) => ({ sessionId: e.sessionId }));
   on('classic.SessionStart', () => ({}));
   on('command.register', ($, e) => ({ value: { command: e.name } }));
+  // Claude Code's own /reload-plugins, as a plugin runs it.
+  const commands: string[] = [];
+  on('command.run', { command: 'reload-plugins' }, ($, e) => {
+    commands.push(e.command);
+    if (options.reload === false) throw new Error('unknown command');
+    return { text: 'Reloaded' } as any;
+  });
   on('ui.status', () => ({ value: undefined }));
   on('ui.toast', ($, e) => { toasts.push(e.text); return { value: undefined }; });
   on('ui.open', ($, e) => { opened.push(e.id); return { value: { isPlaced: true } }; });
@@ -97,6 +105,11 @@ function world(on: On, options: { keychain?: { token: string; comment: string };
   on('ui.focus', ($, e) => { focused.push({ requestId: e.requestId, key: e.element }); return { value: {} }; });
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', props: {}, children: ['native content'] }));
   on('http.fetch', ($, e) => {
+    // The published mod manifest: unreachable unless a test names the newest version.
+    if (e.url === LATEST_MANIFEST) {
+      if (!options.latest) return { deny: 'network down' };
+      return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ name: 'attentionfarm', version: options.latest }) } };
+    }
     const path = e.url.slice(API.length);
     expect(e.url.startsWith(API)).toBe(true);
     const body = e.init?.body ? JSON.parse(e.init.body) : undefined;
@@ -110,6 +123,7 @@ function world(on: On, options: { keychain?: { token: string; comment: string };
     const argv = [...e.argv];
     runs.push({ argv, stdin: e.init?.stdin });
     if (options.security === false) return { deny: 'cannot start' };
+    if (argv[0] === 'claude') return { value: { exitCode: options.updateExit ?? 0, stdout: '', stderr: '' } };
     if (argv[0] !== '/usr/bin/security') return { value: { exitCode: 0, stdout: '', stderr: '' } };
     if (argv[1] === '-i') {
       const match = /-j "([^"]*)" -w "([^"]*)"/.exec(e.init?.stdin ?? '');
@@ -122,7 +136,7 @@ function world(on: On, options: { keychain?: { token: string; comment: string };
     const hex = [...new TextEncoder().encode(keychain.comment)].map(b => b.toString(16).padStart(2, '0').toUpperCase()).join('');
     return { value: { exitCode: 0, stdout: `    "icmt"<blob>=0x${hex}  "escaped"\n`, stderr: '' } };
   });
-  return { stored, clock, sent, toasts, opened, closed, focused, runs, written, submitted, engine, keychain: () => keychain };
+  return { commands, stored, clock, sent, toasts, opened, closed, focused, runs, written, submitted, engine, keychain: () => keychain };
 }
 
 async function start($: any, clock: { advance: (ms: number) => Promise<void> }, surface: 'terminal' | 'desktop' = 'terminal') {
@@ -202,7 +216,7 @@ test('sign up: email, code (auto-submitted when six digits are pasted), keychain
   expect(await view.find({ type: 'Text', text: "you're in." })).toBeUndefined();
   expect(await view.find({ type: 'Text', text: 'watch an ad, get tokens for claude code.' })).toBeDefined();
   for (const request of sent) {
-    expect(request.headers['x-attentionfarm-mod']).toBe('0.4.1');
+    expect(request.headers['x-attentionfarm-mod']).toBe('0.4.2');
     expect(Object.keys(request.body ?? {}).every(key => ALLOWED_KEYS[request.path].includes(key))).toBe(true);
   }
   const after = view;
@@ -304,7 +318,7 @@ test('session start: restores from the keychain and confirms the session with th
   const live = world(on, { keychain: { token: TOKEN, comment: MASKED } });
   await start($, live.clock);
   // The session, then the free models for the picker.
-  expect(live.sent).toEqual(['/me', '/backup/status', '/ad/status'].map(path => ({ path, method: 'GET', headers: { 'x-attentionfarm-mod': '0.4.1', authorization: `Bearer ${TOKEN}` }, body: undefined })));
+  expect(live.sent).toEqual(['/me', '/backup/status', '/ad/status'].map(path => ({ path, method: 'GET', headers: { 'x-attentionfarm-mod': '0.4.2', authorization: `Bearer ${TOKEN}` }, body: undefined })));
   expect(await (await band($, 'terminal', 'live')).find({ type: 'Button', key: 'attentionfarm-account', text: MASKED })).toBeDefined();
 });
 
@@ -880,7 +894,7 @@ for (const surface of SURFACES) {
     await start($, w.clock, surface);
     const view = await band($, surface);
     expect(await view.find({ type: 'Text', text: 'watch ad, get tokens' })).toBeDefined();
-    expect(await view.find({ type: 'Text', text: '1m tokens for 15 seconds' })).toBeDefined();
+    expect(JSON.stringify(await view.drawn())).not.toMatch(/tokens for \d+ seconds/);
     const message = await $.ui.mount({ plugin: 'attentionfarm', surface, component: 'UserMessage', requestId: 'm1', props: { text: 'list the files' } as any });
     await view.press({ key: 'attentionfarm-watch' });
     expect(w.sent.find(request => request.path === '/ad/start')?.body).toEqual({ surface });
@@ -976,4 +990,64 @@ test('free tokens used up: the band offers an ad, and a paid reply keeps the ear
   expect(await view.find({ type: 'Text', text: 'watch ad, get more' })).toBeDefined();
   await step($);
   expect(await view.find({ type: 'Text', text: '1.5m' })).toBeDefined();
+});
+
+for (const surface of SURFACES) {
+  for (const latest of [undefined, '0.4.2', '0.4.1', 'not-a-version']) {
+    test(`no newer mod on ${surface} (published: ${latest ?? 'unreachable'}): no update button, and no version anywhere in the band`, async ($, on) => {
+      const { clock } = world(on, { latest });
+      await start($, clock, surface);
+      const drawn = await band($, surface);
+      expect(await drawn.find({ type: 'Button', key: 'attentionfarm-update' })).toBeUndefined();
+      expect(JSON.stringify(await drawn.drawn())).not.toMatch(/\d+\.\d+\.\d+|updat/);
+      await drawn.unmount();
+    });
+  }
+
+  test(`a newer mod on ${surface}: one update button after the wordmark; a press runs claude code's plugin update, then reloads the plugins itself`, async ($, on) => {
+    const { clock, runs, commands } = world(on, { latest: '0.5.0' });
+    await start($, clock, surface);
+    const drawn = await band($, surface);
+    const button = await drawn.find({ type: 'Button', key: 'attentionfarm-update' });
+    expect(button?.props).toMatchObject({ variant: 'secondary', label: 'update' });
+    expect(JSON.stringify(await drawn.drawn())).not.toMatch(/\d+\.\d+\.\d+/);
+    await drawn.press({ key: 'attentionfarm-update' });
+    await clock.advance(0);
+    const claudeRuns = runs.filter(run => run.argv[0] === 'claude').map(run => run.argv);
+    expect(claudeRuns).toEqual([
+      ['claude', 'plugin', 'marketplace', 'update', 'attentionfarm'],
+      ['claude', 'plugin', 'update', 'attentionfarm@attentionfarm'],
+    ]);
+    expect(commands).toEqual(['reload-plugins']);
+    expect(await drawn.find({ type: 'Button', key: 'attentionfarm-update' })).toBeUndefined();
+    expect(await drawn.find({ type: 'Text', text: 'updating…' })).toBeDefined();
+    expect(JSON.stringify(await drawn.drawn())).not.toMatch(/restart/);
+    await drawn.unmount();
+    // The reload is a fresh load: its session.start clears "updating…", and with nothing newer, no button.
+    await start($, clock, surface);
+    const reloaded = await band($, surface, `reloaded-${surface}`);
+    expect(await reloaded.find({ type: 'Text', text: 'updating…' })).toBeUndefined();
+    await reloaded.unmount();
+  });
+}
+
+test('an update that fails puts the button back and says how to update by hand', async ($, on) => {
+  const { clock, toasts } = world(on, { latest: '0.5.0', updateExit: 1 });
+  await start($, clock);
+  const drawn = await band($, 'terminal');
+  await drawn.press({ key: 'attentionfarm-update' });
+  await clock.advance(0);
+  expect(await drawn.find({ type: 'Button', key: 'attentionfarm-update' })).toBeDefined();
+  expect(toasts).toContain("couldn't update attentionfarm. run claude plugin update attentionfarm@attentionfarm in a terminal.");
+});
+
+test('when /reload-plugins cannot run, the update still landed: the band clears and says to reload', async ($, on) => {
+  const { clock, toasts, commands } = world(on, { latest: '0.5.0', reload: false });
+  await start($, clock);
+  const drawn = await band($, 'terminal');
+  await drawn.press({ key: 'attentionfarm-update' });
+  await clock.advance(0);
+  expect(commands).toEqual(['reload-plugins']);
+  expect(toasts).toContain('attentionfarm updated. run /reload-plugins to load it.');
+  expect(await drawn.find({ type: 'Text', text: 'updating…' })).toBeUndefined();
 });

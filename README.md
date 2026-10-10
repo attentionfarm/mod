@@ -32,6 +32,8 @@ claude plugin update attentionfarm@attentionfarm
 
 exit and restart with `claude` after updating.
 
+from 0.4.2 on, the band shows an **update** button whenever a newer version is out. press it and the mod runs these two commands, then `/reload-plugins`, so the new version loads without a restart.
+
 ## your account
 
 - `/attentionfarm signup` or `/attentionfarm login`: opens the sign-in pane. paste the code with or without spaces; it checks itself at 6 digits.

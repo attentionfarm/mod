@@ -24,7 +24,15 @@ const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.4.1';
+const MOD_VERSION = '0.4.2';
+// A newer mod: the band shows an update button, and only then. The published manifest says what is newest;
+// a press runs claude code's own plugin update, then /reload-plugins, so the new version loads in place.
+const UPDATE = { plugin: 'attentionfarm', key: 'modUpdate' };
+const INITIAL_UPDATE = { status: 'none' };
+const LATEST_MANIFEST = 'https://raw.githubusercontent.com/attentionfarm/mod/main/.claude-plugin/plugin.json';
+const INSTALLED_PLUGIN = 'attentionfarm@attentionfarm';
+const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
+const UPDATE_RUN_MS = 120000;
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
@@ -88,6 +96,72 @@ let switching = false;
 // What was typed and the challenge id stay out of $.state, which any plugin can read. The session
 // token is never held here at all: it is read from the keychain when a request needs it.
 const flow = { gen: 0, typedEmail: '', email: '', typedCode: '', challengeId: undefined, expiresAt: 0, devCode: undefined, busy: false, resendTimer: undefined };
+let updateTimer;
+
+// Whether `latest` (x.y.z) is above `current`. Anything not spelled x.y.z is never newer.
+function isNewer(latest, current) {
+  const parse = version => (typeof version === 'string' && /^\d+\.\d+\.\d+$/.test(version) ? version.split('.').map(Number) : undefined);
+  const [a, b] = [parse(latest), parse(current)];
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i += 1) if (a[i] !== b[i]) return a[i] > b[i];
+  return false;
+}
+
+// Reads the published manifest. No answer leaves the band as it was; an answer no newer clears the button.
+async function checkForUpdate($) {
+  let deadline;
+  const timeout = new Promise(resolve => { deadline = $.clock.after(REQUEST_TIMEOUT_MS, () => resolve(undefined)); });
+  try {
+    const response = await Promise.race([$.http.fetch(LATEST_MANIFEST), timeout]);
+    if (!response?.ok) return;
+    let version;
+    try { ({ version } = JSON.parse(response.text) || {}); } catch { return; }
+    const { value: current = INITIAL_UPDATE } = await $.state.get(UPDATE);
+    if (current.status === 'updating') return;
+    const status = isNewer(version, MOD_VERSION) ? 'available' : 'none';
+    if (status !== current.status) await $.state.set(UPDATE, { status });
+  } catch {
+  } finally {
+    deadline?.cancel();
+  }
+}
+
+// `claude` on the PATH, else where its installer puts it: the desktop app's PATH may not hold it.
+async function runClaude($, args) {
+  const home = await $.env.get('HOME').catch(() => undefined);
+  for (const bin of ['claude', ...(home ? [`${home}/.local/bin/claude`] : [])]) {
+    try { return await $.process.run([bin, ...args], { timeoutMs: UPDATE_RUN_MS }); } catch {}
+  }
+  return undefined;
+}
+
+// The press: the same two commands the readme gives for an update, then /reload-plugins, which loads the
+// new version in this session; its session.start clears "updating…" and looks again.
+async function updateMod($) {
+  const { value: current = INITIAL_UPDATE } = await $.state.get(UPDATE);
+  if (current.status !== 'available') return;
+  await $.state.set(UPDATE, { status: 'updating' });
+  const refreshed = await runClaude($, ['plugin', 'marketplace', 'update', 'attentionfarm']);
+  const updated = refreshed?.exitCode === 0 ? await runClaude($, ['plugin', 'update', INSTALLED_PLUGIN]) : undefined;
+  if (updated?.exitCode !== 0) {
+    await $.state.set(UPDATE, { status: 'available' });
+    $.ui.toast(`couldn't update attentionfarm. run claude plugin update ${INSTALLED_PLUGIN} in a terminal.`);
+    return;
+  }
+  // Queued until the session is idle; the reload replaces this module, so nothing waits on it.
+  void $.command.run({ command: 'reload-plugins' }).catch(async () => {
+    await $.state.set(UPDATE, INITIAL_UPDATE);
+    $.ui.toast('attentionfarm updated. run /reload-plugins to load it.');
+  });
+}
+
+// Right after the wordmark: a button while an update waits, a quiet line while it runs and reloads.
+function updateSlot(ui, $, modUpdate) {
+  const { Text, Button } = ui;
+  if (modUpdate.status === 'available') return Button({ key: 'attentionfarm-update', variant: 'secondary', label: 'update', onPress: () => updateMod($) });
+  if (modUpdate.status === 'updating') return Text({ key: 'attentionfarm-updating', dimColor: true, children: ['updating…'] });
+  return undefined;
+}
 
 function stopTicker() {
   generation += 1;
@@ -1025,10 +1099,7 @@ function earnedCount(Box, Text, earned) {
 // The way to earn: one button, and what an ad is worth beside it; or, when ads are done for now, why.
 function watchRow($, Box, Text, Button, earn, surface, label = 'watch ad, get tokens') {
   if (!earn.available) return earn.message ? line(Text, earn.message, { dimColor: true, wrap: 'truncate-end' }) : undefined;
-  return Box({ flexDirection: 'row', alignItems: 'center', columnGap: 1, children: [
-    Button({ key: 'attentionfarm-watch', plain: true, onPress: () => watchAd($, surface), children: [Text({ bold: true, children: [label] })] }),
-    line(Text, `${formatTokens(earn.tokensPerAd || 1_000_000)} tokens for 15 seconds`, { dimColor: true, wrap: 'truncate-end' }),
-  ] });
+  return Button({ key: 'attentionfarm-watch', plain: true, onPress: () => watchAd($, surface), children: [Text({ bold: true, children: [label] })] });
 }
 
 // Free backup in the band: the offer after a limit stop, then which model is answering and the way back.
@@ -1131,11 +1202,12 @@ function modelPicker($, ui, models, picked) {
 }
 
 // The resting band: two lines, the wordmark and one action, then the honest line.
-function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup = false, pose = switchTarget(backup), free = { models: [] }, earn = INITIAL_EARN) {
+function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup = false, pose = switchTarget(backup), free = { models: [] }, earn = INITIAL_EARN, modUpdate = INITIAL_UPDATE) {
   const ui = $.ui.resolve(e);
   const { Box, Text, Button } = ui;
   const canLogin = LOGIN_SURFACES.has(e.surface) && account.status !== 'unsupported';
-  const top = [wordmark($, ui, e.surface), Box({ flexGrow: 1 })];
+  const slot = updateSlot(ui, $, modUpdate);
+  const top = [wordmark($, ui, e.surface), ...(slot ? [slot] : []), Box({ flexGrow: 1 })];
   const loggedIn = account.status === 'in' || account.status === 'offline';
   // One slot, three states, on the right beside the account: use free af tokens while on claude (free tokens by
   // choice, not only after a limit), switching… mid-way, back to claude while on free tokens.
@@ -1430,6 +1502,15 @@ export function register(on) {
     // unless this load already asked: a terminal can draw the band before session.start runs.
     if (!restoring) await $.state.set(ACCOUNT, INITIAL_ACCOUNT);
     if (e.isInteractive && LOGIN_SURFACES.has(e.surface)) ensureRestore($);
+    // Look for a newer mod now and every few hours; the button appears only when there is one.
+    updateTimer?.cancel();
+    updateTimer = undefined;
+    // A fresh load runs no update: one left "updating…" by the load before (the reload it asked for) is over.
+    await $.state.set(UPDATE, INITIAL_UPDATE);
+    if (e.isInteractive) {
+      $.clock.after(0, () => checkForUpdate($));
+      updateTimer = $.clock.every(UPDATE_CHECK_MS, () => checkForUpdate($));
+    }
     return result;
   });
 
@@ -1488,6 +1569,8 @@ export function register(on) {
   on('session.end', ($, e, next) => {
     endAdSession($);
     stopTicker();
+    updateTimer?.cancel();
+    updateTimer = undefined;
     flow.resendTimer?.cancel();
     $.ui.status(undefined);
     return next(e);
@@ -1546,6 +1629,7 @@ export function register(on) {
     // While the ad plays the band is the ad's: the ad itself, or its countdown.
     if (adPlaying()) return Box({ flexDirection: 'column', children: [native, frame(Box, [renderAdBand($, e)], e.surface)] });
     const { value: earn = INITIAL_EARN } = await $.state.get(EARN);
+    const { value: modUpdate = INITIAL_UPDATE } = await $.state.get(UPDATE);
     if (LOGIN_SURFACES.has(e.surface)) {
       lastSurface = e.surface;
       bandRequestId = e.requestId;
@@ -1555,6 +1639,6 @@ export function register(on) {
         return Box({ flexDirection: 'column', children: [native, frame(Box, [renderFlow($, e, pane, account)], e.surface)] });
       }
     }
-    return Box({ flexDirection: 'column', children: [native, renderBand($, e, account, backup, used, canBackup, pose, free, earn)] });
+    return Box({ flexDirection: 'column', children: [native, renderBand($, e, account, backup, used, canBackup, pose, free, earn, modUpdate)] });
   });
 }

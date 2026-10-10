@@ -19,6 +19,8 @@ declare module 'claude-code' {
       // Watch ad, get tokens, as the server last said: whether earning exists, whether an ad can be watched now,
       // why not (a limit's message), tokens earned and not yet spent, an ad's worth and ads left today.
       earn: { enabled?: boolean; available: boolean; message?: string; earned: number; tokensPerAd?: number; adsLeft?: number };
+      // A newer mod: none, available (the band's update button), or updating (through the plugin reload).
+      modUpdate: { status: 'none' | 'available' | 'updating' };
       pane: {
         site: 'none' | 'pane' | 'band';
         step: 'email' | 'code' | 'account' | 'delete';

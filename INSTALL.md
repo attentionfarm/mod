@@ -28,6 +28,8 @@ claude plugin update attentionfarm@attentionfarm
 
 exit and restart with `claude` after updating.
 
+from 0.4.2 on, the band shows an **update** button whenever a newer version is out. press it and the mod runs these two commands, then `/reload-plugins`, so the new version loads without a restart.
+
 ## what to expect
 
 a two-line band appears above the prompt: the **attentionfarm** wordmark and **sign up or log in**, then "watch an ad, get tokens for claude code." one email code signs you up or logs you in; there is no password. the cli ticker repeats **watch ad, get tokens | attentionfarm |**.
