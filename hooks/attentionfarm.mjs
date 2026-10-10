@@ -14,7 +14,7 @@ const TICKER_COPY = 'watch ad, get tokens | attentionfarm | ';
 const TICKER_WIDTH = 60;
 const INITIAL_TICKER = { enabled: true, paused: false };
 
-const MOD_VERSION = '0.3.4';
+const MOD_VERSION = '0.3.5';
 const PANE_ID = 'attentionfarm-account';
 const PRODUCTION_API = 'https://api.attentionfarm.com/api/mod';
 const PRODUCTION_SERVICE = 'attentionfarm-mod';
@@ -673,9 +673,13 @@ function line(Text, value, props = {}) {
   return Text({ ...props, children: [value] });
 }
 
-// The wordmark links to the website: an OSC 8 link in the terminal, an anchor on desktop.
-function wordmark(Text, Link) {
-  return Text({ bold: true, backgroundColor: TIDE, color: TIDE_INK, children: [Link({ href: SITE_URL, children: [' attentionfarm '] })] });
+// The wordmark opens the website. A plain Button around the tide chip keeps the chip's look;
+// a Link would draw its own underline and colour over it.
+function wordmark($, Text, Button) {
+  return Button({
+    key: 'attentionfarm-site', plain: true, label: 'attentionfarm', onPress: () => openUrl($, SITE_URL, 'attentionfarm.com'),
+    children: [Text({ bold: true, backgroundColor: TIDE, color: TIDE_INK, children: [' attentionfarm '] })],
+  });
 }
 
 // Every attentionfarm band wears a tide outline. The desktop app draws its own padded card around
@@ -685,10 +689,14 @@ function frame(Box, children, surface) {
   return Box({ flexDirection: 'column', borderStyle: 'round', borderColor: TIDE, paddingX: 1, ...pull, children });
 }
 
-function openPrivacy($) {
-  return $.process.run(['open', PRIVACY_URL]).then(result => {
+function openUrl($, url, name) {
+  return $.process.run(['open', url]).then(result => {
     if (result.exitCode !== 0) throw new Error('open-failed');
-  }).catch(() => $.ui.toast('could not open attentionfarm.com/privacy in your browser.'));
+  }).catch(() => $.ui.toast(`could not open ${name} in your browser.`));
+}
+
+function openPrivacy($) {
+  return openUrl($, PRIVACY_URL, 'attentionfarm.com/privacy');
 }
 
 function heading(Box, Text, Button, $, title, detail, { close = true, detailWrap = 'truncate-end' } = {}) {
@@ -801,9 +809,9 @@ function backupRows($, Box, Text, Button, account, backup, used) {
 
 // The resting band: two lines, the wordmark and one action, then the honest line.
 function renderBand($, e, account, backup = INITIAL_BACKUP, used = 0, canBackup = false) {
-  const { Box, Text, Button, Link } = $.ui.resolve(e);
+  const { Box, Text, Button } = $.ui.resolve(e);
   const canLogin = LOGIN_SURFACES.has(e.surface) && account.status !== 'unsupported';
-  const top = [wordmark(Text, Link), Box({ flexGrow: 1 })];
+  const top = [wordmark($, Text, Button), Box({ flexGrow: 1 })];
   // One slot, two states: use free af tokens while on claude, back to claude while on free tokens.
   if (backup.status === 'on') {
     top.push(Button({ key: 'attentionfarm-backup-off', plain: true, label: 'back to claude', onPress: () => switchBack($) }));

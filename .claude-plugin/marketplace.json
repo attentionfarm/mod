@@ -8,7 +8,7 @@
       "name": "attentionfarm",
       "source": "./",
       "description": "sign up or log in with a 6-digit email code, an attentionfarm band above the prompt, and a scrolling status line. watch an ad, get tokens for claude code.",
-      "version": "0.3.4"
+      "version": "0.3.5"
     }
   ],
   "description": "attentionfarm mods for claude code"
